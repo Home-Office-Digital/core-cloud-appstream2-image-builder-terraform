@@ -74,6 +74,17 @@ resource "aws_iam_policy" "step_function_policy" {
         Action   = ["ssm:DescribeInstanceInformation"]
         Resource = "*"
       },
+      # Allow Step Functions to use the KMS key for CloudWatch Log Group encryption
+      {
+        Effect = "Allow"
+        Action = [
+          "kms:Encrypt",
+          "kms:Decrypt",
+          "kms:GenerateDataKey*",
+          "kms:DescribeKey"
+        ]
+        Resource = aws_kms_key.sfn_logs.arn
+      },
     ]
   })
 }
@@ -193,6 +204,7 @@ resource "aws_sfn_state_machine" "appstream_automation" {
 resource "aws_cloudwatch_log_group" "sfn_logs" {
   name              = "/aws/states/${var.project_name}-state-machine"
   retention_in_days = 30
+  kms_key_id        = aws_kms_key.sfn_logs.arn
 }
 
 data "aws_iam_policy_document" "sfn_logging" {
