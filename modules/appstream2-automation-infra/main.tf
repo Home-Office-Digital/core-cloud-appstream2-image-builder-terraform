@@ -203,7 +203,7 @@ resource "aws_sfn_state_machine" "appstream_automation" {
 
 resource "aws_cloudwatch_log_group" "sfn_logs" {
   name              = "/aws/states/${var.project_name}-state-machine"
-  retention_in_days = 30
+  retention_in_days = 365
   kms_key_id        = aws_kms_key.sfn_logs.arn
 }
 
