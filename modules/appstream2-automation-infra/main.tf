@@ -195,8 +195,8 @@ resource "aws_sfn_state_machine" "appstream_automation" {
   )
 
   logging_configuration {
-    include_execution_data = true         # captures input, output, and execution details
-    level                  = "ALL"        # INFO | ERROR | ALL
+    include_execution_data = true
+    level                  = "ALL"
     log_destination        = "${aws_cloudwatch_log_group.sfn_logs.arn}:*" 
   }
 }
