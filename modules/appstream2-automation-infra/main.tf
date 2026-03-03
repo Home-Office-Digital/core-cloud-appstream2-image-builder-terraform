@@ -182,4 +182,39 @@ resource "aws_sfn_state_machine" "appstream_automation" {
       PreliveAccountId   = var.prelive_account_id
     }
   )
+
+  logging_configuration {
+    include_execution_data = true         # captures input, output, and execution details
+    level                  = "ALL"        # INFO | ERROR | ALL
+    log_destination        = "${aws_cloudwatch_log_group.sfn_logs.arn}:*" 
+  }
+}
+
+resource "aws_cloudwatch_log_group" "sfn_logs" {
+  name              = "/aws/states/${var.project_name}-state-machine"
+  retention_in_days = 30
+}
+
+data "aws_iam_policy_document" "sfn_logging" {
+  statement {
+    effect = "Allow"
+
+    actions = [
+      "logs:CreateLogDelivery",
+      "logs:GetLogDelivery",
+      "logs:UpdateLogDelivery",
+      "logs:DeleteLogDelivery",
+      "logs:ListLogDeliveries",
+      "logs:PutResourcePolicy",
+      "logs:DescribeResourcePolicies",
+      "logs:DescribeLogGroups"
+    ]
+
+    resources = ["*"]
+  }
+}
+
+resource "aws_iam_role_policy_attachment" "step_function_logging_policy_attachment" {
+  role       = aws_iam_role.step_function_role.name
+  policy_arn = aws_iam_policy.sfn_logging.arn
 }
