@@ -187,7 +187,6 @@ resource "aws_ssm_document" "appstream_setup" {
   name          = "${var.project_name}-setup-document"
   document_type = "Command"
   document_format = "JSON"
-  document_version = "$LATEST"
   content       = file(var.doc_source)
 }
 
@@ -255,4 +254,22 @@ resource "aws_ssm_parameter" "banner_message" {
   lifecycle {
     ignore_changes = [value]  # ← prevents Terraform overwriting manual updates
   }
+}
+
+# KMS Key for Step Functions CloudWatch log encryption
+resource "aws_kms_key" "sfn_logs" {
+  description             = "KMS key for ${var.project_name} Step Functions CloudWatch logs"
+  deletion_window_in_days = 7
+  enable_key_rotation     = true
+}
+
+resource "aws_kms_alias" "sfn_logs" {
+  name          = "alias/${var.project_name}-sfn-logs"
+  target_key_id = aws_kms_key.sfn_logs.key_id
+}
+
+# IAM Policy for Step Functions logging — wraps the data source into an actual policy
+resource "aws_iam_policy" "sfn_logging" {
+  name   = "${var.project_name}-sfn-logging-policy"
+  policy = data.aws_iam_policy_document.sfn_logging.json
 }
