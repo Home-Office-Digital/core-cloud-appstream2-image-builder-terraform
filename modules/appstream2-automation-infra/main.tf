@@ -143,6 +143,18 @@ resource "aws_iam_policy" "appstream_instance_policy" {
           "ec2messages:SendReply"
         ]
         Resource = "arn:aws:ec2:${var.aws_region}:${var.account_id}:instance/*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "kms:Decrypt",
+          "kms:DescribeKey",
+          "ssm:GetParameter"
+      ]
+      Resource = [
+        aws_kms_key.sfn_logs.arn,
+        "arn:aws:ssm:${var.aws_region}:${var.account_id}:parameter/${var.project_name}/appstream/*"
+      ]
       }
     ]
   })
@@ -235,7 +247,8 @@ resource "aws_iam_role_policy_attachment" "step_function_logging_policy_attachme
 # SSM Parameter Store — AppStream session banner message
 resource "aws_ssm_parameter" "banner_message" {
   name        = "/${var.project_name}/appstream/banner-message"
-  type        = "String"
+  type        = "SecureString"
+  key_id     = aws_kms_key.sfn_logs.arn
   description = "Legal banner message displayed at AppStream session start"
   value       = var.banner_message
 
