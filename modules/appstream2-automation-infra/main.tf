@@ -174,8 +174,9 @@ resource "aws_iam_role_policy_attachment" "appstream_service_access" {
 resource "aws_ssm_document" "appstream_setup" {
   name          = "${var.project_name}-setup-document"
   document_type = "Command"
-  content       = file(var.doc_source)
   document_format = "JSON"
+  document_version = "$LATEST"
+  content       = file(var.doc_source)
 }
 
 # Step Function State Machine
@@ -229,4 +230,16 @@ data "aws_iam_policy_document" "sfn_logging" {
 resource "aws_iam_role_policy_attachment" "step_function_logging_policy_attachment" {
   role       = aws_iam_role.step_function_role.name
   policy_arn = aws_iam_policy.sfn_logging.arn
+}
+
+# SSM Parameter Store — AppStream session banner message
+resource "aws_ssm_parameter" "banner_message" {
+  name        = "/${var.project_name}/appstream/banner-message"
+  type        = "String"
+  description = "Legal banner message displayed at AppStream session start"
+  value       = var.banner_message
+
+  lifecycle {
+    ignore_changes = [value]  # ← prevents Terraform overwriting manual updates
+  }
 }
