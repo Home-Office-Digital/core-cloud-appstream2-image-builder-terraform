@@ -51,3 +51,8 @@ variable "account_id" {
   type        = string
 }
 
+variable "banner_message" {
+  type        = string
+  description = "Legal notice displayed to users at AppStream session start"
+}
+
