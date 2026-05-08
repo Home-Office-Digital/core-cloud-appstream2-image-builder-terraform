@@ -56,7 +56,7 @@ No modules.
 
 ## Testing
 
-This module includes Terraform native tests in `main.tftest.hcl`.
+This module includes Terraform native tests in `tests/main.tftest.hcl`.
 
 Run tests locally from the module directory:
 
