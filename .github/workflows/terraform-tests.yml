@@ -20,4 +20,5 @@ jobs:
       modules_root: modules
       terraform_version: 1.9.8
       comment_on_pr: true
+      pull_request_number: ${{ github.event.pull_request.number || '' }}
     secrets: inherit

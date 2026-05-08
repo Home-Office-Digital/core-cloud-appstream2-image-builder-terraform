@@ -18,6 +18,11 @@ on:
         required: false
         type: boolean
         default: true
+      pull_request_number:
+        description: Pull request number passed by caller workflow
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -180,7 +185,7 @@ jobs:
         uses: actions/github-script@v7
         env:
           MODULES_JSON: ${{ needs.discover-modules.outputs.modules }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_NUMBER: ${{ inputs.pull_request_number }}
           EVENT_NAME: ${{ github.event_name }}
           GITHUB_SHA: ${{ github.sha }}
         with:
