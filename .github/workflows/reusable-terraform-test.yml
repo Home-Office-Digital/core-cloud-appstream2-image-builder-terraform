@@ -166,7 +166,7 @@ jobs:
       - discover-modules
       - terraform-test
       - no-test-modules
-    if: github.event_name == 'pull_request' && inputs.comment_on_pr && always()
+    if: github.event.pull_request.number && inputs.comment_on_pr && always()
     steps:
       - name: Download Terraform test artifacts
         if: needs.discover-modules.outputs.modules != '[]'
