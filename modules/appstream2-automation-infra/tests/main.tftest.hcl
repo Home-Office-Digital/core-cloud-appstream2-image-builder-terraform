@@ -31,7 +31,7 @@ run "plan_succeeds_with_required_inputs" {
   }
 
   assert {
-    condition     = output.ssm_document_name == "test-appstream-setup-document"
+    condition     = output.ssm_document_name == "test-appstream-setup-document-should-fail"
     error_message = "SSM document name should include the project name"
   }
 
