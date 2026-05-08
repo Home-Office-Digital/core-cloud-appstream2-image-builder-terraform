@@ -166,6 +166,12 @@ jobs:
                 body += '\nNo Terraform test result artifacts were found.';
               } else {
                 const rows = [];
+                const statusWithIcon = (status) => {
+                  if (status === 'pass') return ':white_check_mark: pass';
+                  if (status === 'fail' || status === 'error') return ':x: ' + status;
+                  return ':warning: ' + (status ?? 'unknown');
+                };
+
                 for (const file of files.sort()) {
                   const moduleName = file.replace('-terraform-test.json', '');
                   const fullPath = path.join(root, file);
@@ -184,12 +190,12 @@ jobs:
                   }
 
                   if (!summary) {
-                    rows.push(`| ${moduleName} | error | n/a | n/a | n/a | n/a |`);
+                    rows.push(`| ${moduleName} | :x: error | n/a | n/a | n/a | n/a |`);
                     continue;
                   }
 
                   rows.push(
-                    `| ${moduleName} | ${summary.status ?? 'unknown'} | ${summary.passed ?? 0} | ${summary.failed ?? 0} | ${summary.errored ?? 0} | ${summary.skipped ?? 0} |`
+                    `| ${moduleName} | ${statusWithIcon(summary.status)} | ${summary.passed ?? 0} | ${summary.failed ?? 0} | ${summary.errored ?? 0} | ${summary.skipped ?? 0} |`
                   );
                 }
 
