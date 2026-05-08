@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -121,3 +122,108 @@ jobs:
     steps:
       - name: Skip
         run: echo "No modules with Terraform tests were found under modules/*/tests."
+
+  comment-test-results:
+    name: Comment Terraform test results on PR
+    runs-on: ubuntu-latest
+    needs:
+      - discover-modules
+      - terraform-test
+      - no-test-modules
+    if: github.event_name == 'pull_request' && always()
+    steps:
+      - name: Download Terraform test artifacts
+        if: needs.discover-modules.outputs.modules != '[]'
+        uses: actions/download-artifact@v4
+        with:
+          pattern: terraform-test-results-*
+          path: terraform-test-results
+          merge-multiple: true
+
+      - name: Build and publish PR comment
+        uses: actions/github-script@v7
+        env:
+          MODULES_JSON: ${{ needs.discover-modules.outputs.modules }}
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+
+            const marker = '<!-- terraform-test-results -->';
+            const modules = JSON.parse(process.env.MODULES_JSON || '[]');
+
+            let body = `${marker}\n## Terraform Test Results\n`;
+
+            if (modules.length === 0) {
+              body += '\nNo Terraform test modules were discovered in this PR context.';
+            } else {
+              const root = 'terraform-test-results';
+              const files = fs.existsSync(root)
+                ? fs.readdirSync(root).filter((f) => f.endsWith('.json'))
+                : [];
+
+              if (files.length === 0) {
+                body += '\nNo Terraform test result artifacts were found.';
+              } else {
+                const rows = [];
+                for (const file of files.sort()) {
+                  const moduleName = file.replace('-terraform-test.json', '');
+                  const fullPath = path.join(root, file);
+                  const lines = fs.readFileSync(fullPath, 'utf8').split(/\r?\n/).filter(Boolean);
+
+                  let summary = null;
+                  for (const line of lines) {
+                    try {
+                      const event = JSON.parse(line);
+                      if (event.type === 'test_summary' && event.test_summary) {
+                        summary = event.test_summary;
+                      }
+                    } catch (e) {
+                      // Ignore malformed lines and continue.
+                    }
+                  }
+
+                  if (!summary) {
+                    rows.push(`| ${moduleName} | error | n/a | n/a | n/a | n/a |`);
+                    continue;
+                  }
+
+                  rows.push(
+                    `| ${moduleName} | ${summary.status ?? 'unknown'} | ${summary.passed ?? 0} | ${summary.failed ?? 0} | ${summary.errored ?? 0} | ${summary.skipped ?? 0} |`
+                  );
+                }
+
+                body += '\n| Module | Status | Passed | Failed | Errored | Skipped |';
+                body += '\n|---|---:|---:|---:|---:|---:|';
+                body += `\n${rows.join('\n')}`;
+              }
+            }
+
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const issue_number = context.issue.number;
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number,
+              per_page: 100,
+            });
+
+            const existing = comments.find((c) => c.body && c.body.includes(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number,
+                body,
+              });
+            }
