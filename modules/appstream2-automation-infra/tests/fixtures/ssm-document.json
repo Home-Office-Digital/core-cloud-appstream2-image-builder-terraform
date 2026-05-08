@@ -1,0 +1,15 @@
+{
+  "schemaVersion": "2.2",
+  "description": "Test SSM document for terraform test",
+  "mainSteps": [
+    {
+      "action": "aws:runShellScript",
+      "name": "noop",
+      "inputs": {
+        "runCommand": [
+          "echo terraform-test"
+        ]
+      }
+    }
+  ]
+}

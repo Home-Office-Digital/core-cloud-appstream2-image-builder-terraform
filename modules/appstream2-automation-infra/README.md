@@ -53,3 +53,15 @@ No modules.
 | <a name="output_ssm_document_name"></a> [ssm\_document\_name](#output\_ssm\_document\_name) | Name of the SSM document |
 | <a name="output_state_machine_arn"></a> [state\_machine\_arn](#output\_state\_machine\_arn) | ARN of the Step Function state machine |
 <!-- END_TF_DOCS -->
+
+## Testing
+
+This module includes Terraform native tests in `main.tftest.hcl`.
+
+Run tests locally from the module directory:
+
+```bash
+terraform init -backend=false
+terraform validate
+terraform test
+```
