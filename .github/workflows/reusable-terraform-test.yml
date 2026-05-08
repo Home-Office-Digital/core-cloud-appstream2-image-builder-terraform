@@ -180,6 +180,7 @@ jobs:
         uses: actions/github-script@v7
         env:
           MODULES_JSON: ${{ needs.discover-modules.outputs.modules }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         with:
           script: |
             const fs = require('fs');
@@ -257,7 +258,17 @@ jobs:
 
             const owner = context.repo.owner;
             const repo = context.repo.repo;
-            const issue_number = context.issue.number;
+            const issue_number = Number(
+              process.env.PR_NUMBER ||
+              context.payload.pull_request?.number ||
+              context.issue.number ||
+              0
+            );
+
+            if (!issue_number) {
+              core.warning('PR number was not found in workflow context. Skipping PR comment.');
+              return;
+            }
 
             const comments = await github.paginate(github.rest.issues.listComments, {
               owner,
