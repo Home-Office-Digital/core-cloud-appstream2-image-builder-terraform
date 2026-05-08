@@ -166,7 +166,7 @@ jobs:
       - discover-modules
       - terraform-test
       - no-test-modules
-    if: github.event.pull_request.number && inputs.comment_on_pr && always()
+    if: inputs.comment_on_pr && always()
     steps:
       - name: Download Terraform test artifacts
         if: needs.discover-modules.outputs.modules != '[]'
@@ -181,6 +181,8 @@ jobs:
         env:
           MODULES_JSON: ${{ needs.discover-modules.outputs.modules }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          EVENT_NAME: ${{ github.event_name }}
+          GITHUB_SHA: ${{ github.sha }}
         with:
           script: |
             const fs = require('fs');
@@ -258,15 +260,29 @@ jobs:
 
             const owner = context.repo.owner;
             const repo = context.repo.repo;
-            const issue_number = Number(
+            let issue_number = Number(
               process.env.PR_NUMBER ||
               context.payload.pull_request?.number ||
               context.issue.number ||
               0
             );
 
+            // For push-triggered caller runs, resolve an open PR from commit SHA.
+            if (!issue_number && process.env.EVENT_NAME === 'push' && process.env.GITHUB_SHA) {
+              const associated = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+                owner,
+                repo,
+                commit_sha: process.env.GITHUB_SHA,
+              });
+
+              const openPr = associated.data.find((pr) => pr.state === 'open');
+              if (openPr) {
+                issue_number = Number(openPr.number);
+              }
+            }
+
             if (!issue_number) {
-              core.warning('PR number was not found in workflow context. Skipping PR comment.');
+              core.notice('No pull request context found for this run. Skipping PR comment.');
               return;
             }
 
