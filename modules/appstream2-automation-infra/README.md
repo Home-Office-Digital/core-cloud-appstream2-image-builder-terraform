@@ -1,3 +1,33 @@
+## AppStream 2 Automation Infrastructure Module
+
+This module provisions the core infrastructure used to automate AppStream image build workflows, including IAM roles/policies, an SSM document, and a Step Functions state machine.
+
+## Testing
+
+Terraform native tests for this module are defined in:
+
+- `tests/main.tftest.hcl`
+
+Fixture files used by tests are in:
+
+- `tests/fixtures/ssm-document.json`
+- `tests/fixtures/stepfunction_definition.json`
+
+### Run Tests Locally
+
+From this module directory:
+
+```bash
+terraform init -backend=false
+terraform validate
+terraform test
+```
+
+### CI Behavior
+
+Terraform tests are executed via GitHub Actions from the top-level workflow and delegated to the reusable workflow.
+Test result JSON artifacts are generated per module and summarized in pull request comments.
+
 <!-- BEGIN_TF_DOCS -->
 ## Requirements
 
