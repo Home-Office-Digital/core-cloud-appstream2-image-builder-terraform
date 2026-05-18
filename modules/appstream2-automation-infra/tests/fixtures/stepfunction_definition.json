@@ -1,0 +1,16 @@
+{
+  "Comment": "Test AppStream image automation",
+  "StartAt": "Complete",
+  "States": {
+    "Complete": {
+      "Type": "Pass",
+      "Result": {
+        "ssmDocName": "${SSMDocName}",
+        "roleArn": "${AppStreamInstanceRoleArn}",
+        "liveAccountId": "${LiveAccountId}",
+        "preliveAccountId": "${PreliveAccountId}"
+      },
+      "End": true
+    }
+  }
+}
