@@ -2,8 +2,16 @@ name: Terraform Tests
 
 on:
   pull_request:
+    types:
+      - opened
+      - reopened
+      - synchronize
+    branches:
+      - main
+
   push:
-  workflow_dispatch:
+    branches:
+      - main
 
 permissions:
   contents: read
