@@ -5,7 +5,7 @@
 This repository houses the **Terraform module** for provisioning the AWS resources required to automate an Amazon AppStream 2.0 streaming image build. The module sets up:
 
 * IAM Roles & Policies for Step Functions and AppStream Image Builder
-* An SSM Automation Document to install and configure packages on a Rocky Linux Image Builder instance
+* Terraform-managed tenant SSM Automation Documents to install and configure packages on a Rocky Linux Image Builder instance
 * A Step Functions State Machine to orchestrate the build pipeline
 * SFN definition rendered via `templatefile`
 
@@ -23,7 +23,11 @@ This repository houses the **Terraform module** for provisioning the AWS resourc
 │       ├── main.tf
 │       ├── variables.tf
 │       ├── outputs.tf
-│       ├── stepfunction_definition.json
+│       ├── tests/
+│       │   ├── main.tftest.hcl
+│       │   └── fixtures/
+│       │       ├── ssm-document.json
+│       │       └── stepfunction_definition.json
 │       └── README.md
 └── README.md         ← (this file)
 
@@ -55,8 +59,11 @@ module "appstream2_automation" {
   base_image_name        = "AppStream-RockyLinux8-YYYY-MM-DD"
   live_account_id        = "<aws-account-id>"
   prelive_account_id     = "<aws-account-id>"
-  doc_source             = "${path.module}/../ssm/AppStreamImageAssistant-automation.json"
-  stepfn_definition_file = "${path.module}/../ssm/stepfunction_definition.json"
+  ssm_document_sources   = {
+    platform = "${path.module}/../platform/ssm/AppStreamImageAssistant-automation.json"
+    apc      = "${path.module}/../apc/ssm/AppStreamImageAssistant-automation.json"
+  }
+  stepfn_definition_file = "${path.module}/../shared/stepfunctions/stepfunction_definition.json"
 
   # Networking
   vpc_id                 = "<vpc-id>"
@@ -68,7 +75,7 @@ module "appstream2_automation" {
 After applying this module, you will have:
 
 * An IAM role and policy for running the SSM automation on EC2
-* An SNS-SSM Automation document (`aws_ssm_document`) to install packages and invoke `AppStreamImageAssistant`
+* Terraform-managed tenant SSM Automation documents (`aws_ssm_document`) to install packages and invoke `AppStreamImageAssistant`
 * A Step Functions state machine (`aws_sfn_state_machine`) definition ready to orchestrate the image build
 
 ---
@@ -81,7 +88,7 @@ After applying this module, you will have:
 | base\_image\_name        | The base AppStream image name to extend (e.g. `AppStream-RockyLinux8-YYYY-MM-DD`) | string | n/a     |    yes   |
 | live\_account\_id        | AWS account ID to share the final image with                                      | string | n/a     |    yes   |
 | prelive\_account\_id     | AWS account ID to share the final image with (pre-production)                     | string | n/a     |    yes   |
-| doc\_source              | Local path to the SSM Automation JSON document                                    | string | n/a     |    yes   |
+| ssm\_document\_sources   | Map of tenant names to local SSM Automation JSON document paths                   | map(string) | n/a | yes |
 | stepfn\_definition\_file | Local path to the Step Functions JSON definition                                  | string | n/a     |    yes   |
 | vpc\_id                  | VPC ID for the AppStream Image Builder instance                                   | string | n/a     |    yes   |
 | subnet\_id               | Subnet ID for the Image Builder instance                                          | string | n/a     |    yes   |
@@ -93,7 +100,7 @@ After applying this module, you will have:
 
 | Name                | Description                                     |
 | ------------------- | ----------------------------------------------- |
-| ssm\_document\_name | Name of the created SSM Document                |
+| ssm\_document\_names | Map of created SSM Document names by tenant     |
 | state\_machine\_arn | ARN of the created Step Functions state machine |
 | base\_image\_name   | The `base_image_name` input (echoed back)       |
 

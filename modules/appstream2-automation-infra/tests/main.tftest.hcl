@@ -17,7 +17,10 @@ run "plan_succeeds_with_required_inputs" {
     base_image_name         = "AppStream-RockyLinux8-2026-05-01"
     live_account_id         = "222222222222"
     prelive_account_id      = "333333333333"
-    doc_source              = "tests/fixtures/ssm-document.json"
+    ssm_document_sources    = {
+      platform = "tests/fixtures/ssm-document.json"
+      apc      = "tests/fixtures/ssm-document.json"
+    }
     stepfn_definition_file  = "tests/fixtures/stepfunction_definition.json"
     vpc_id                  = "vpc-0123456789abcdef0"
     subnet_id               = "subnet-0123456789abcdef0"
@@ -31,18 +34,23 @@ run "plan_succeeds_with_required_inputs" {
   }
 
   assert {
-    condition     = output.ssm_document_name == "test-appstream-setup-document"
-    error_message = "SSM document name should include the project name"
+    condition     = output.ssm_document_names["platform"] == "test-appstream-setup-document-platform"
+    error_message = "Platform SSM document name should include the project name and tenant"
   }
 
   assert {
-    condition     = aws_ssm_document.appstream_setup.document_type == "Command"
-    error_message = "SSM document type should be Command"
+    condition     = output.ssm_document_names["apc"] == "test-appstream-setup-document-apc"
+    error_message = "APC SSM document name should include the project name and tenant"
   }
 
   assert {
-    condition     = aws_ssm_document.appstream_setup.document_format == "JSON"
-    error_message = "SSM document format should be JSON"
+    condition     = aws_ssm_document.appstream_setup["platform"].document_type == "Command"
+    error_message = "Platform SSM document type should be Command"
+  }
+
+  assert {
+    condition     = aws_ssm_document.appstream_setup["apc"].document_format == "JSON"
+    error_message = "APC SSM document format should be JSON"
   }
 
   assert {
@@ -85,7 +93,9 @@ run "plan_uses_default_project_name" {
     base_image_name         = "AppStream-RockyLinux8-2026-05-01"
     live_account_id         = "222222222222"
     prelive_account_id      = "333333333333"
-    doc_source              = "tests/fixtures/ssm-document.json"
+    ssm_document_sources    = {
+      platform = "tests/fixtures/ssm-document.json"
+    }
     stepfn_definition_file  = "tests/fixtures/stepfunction_definition.json"
     vpc_id                  = "vpc-0123456789abcdef0"
     subnet_id               = "subnet-0123456789abcdef0"
@@ -94,8 +104,8 @@ run "plan_uses_default_project_name" {
   }
 
   assert {
-    condition     = output.ssm_document_name == "appstream-automation-setup-document"
-    error_message = "Default project_name should be used when not supplied"
+    condition     = output.ssm_document_names["platform"] == "appstream-automation-setup-document-platform"
+    error_message = "Default project_name should be used in tenant SSM document names when not supplied"
   }
 
   assert {
@@ -114,7 +124,9 @@ run "plan_fails_with_invalid_live_account_id" {
     base_image_name         = "AppStream-RockyLinux8-2026-05-01"
     live_account_id         = "invalid-account-id"
     prelive_account_id      = "333333333333"
-    doc_source              = "tests/fixtures/ssm-document.json"
+    ssm_document_sources    = {
+      platform = "tests/fixtures/ssm-document.json"
+    }
     stepfn_definition_file  = "tests/fixtures/stepfunction_definition.json"
     vpc_id                  = "vpc-0123456789abcdef0"
     subnet_id               = "subnet-0123456789abcdef0"
@@ -137,7 +149,9 @@ run "plan_fails_with_invalid_vpc_id" {
     base_image_name         = "AppStream-RockyLinux8-2026-05-01"
     live_account_id         = "222222222222"
     prelive_account_id      = "333333333333"
-    doc_source              = "tests/fixtures/ssm-document.json"
+    ssm_document_sources    = {
+      platform = "tests/fixtures/ssm-document.json"
+    }
     stepfn_definition_file  = "tests/fixtures/stepfunction_definition.json"
     vpc_id                  = "not-a-vpc-id"
     subnet_id               = "subnet-0123456789abcdef0"
@@ -160,7 +174,9 @@ run "plan_fails_with_empty_banner_message" {
     base_image_name         = "AppStream-RockyLinux8-2026-05-01"
     live_account_id         = "222222222222"
     prelive_account_id      = "333333333333"
-    doc_source              = "tests/fixtures/ssm-document.json"
+    ssm_document_sources    = {
+      platform = "tests/fixtures/ssm-document.json"
+    }
     stepfn_definition_file  = "tests/fixtures/stepfunction_definition.json"
     vpc_id                  = "vpc-0123456789abcdef0"
     subnet_id               = "subnet-0123456789abcdef0"
@@ -183,7 +199,9 @@ run "plan_fails_with_invalid_security_group_id" {
     base_image_name        = "AppStream-RockyLinux8-2026-05-01"
     live_account_id        = "222222222222"
     prelive_account_id     = "333333333333"
-    doc_source             = "tests/fixtures/ssm-document.json"
+    ssm_document_sources   = {
+      platform = "tests/fixtures/ssm-document.json"
+    }
     stepfn_definition_file = "tests/fixtures/stepfunction_definition.json"
     vpc_id                 = "vpc-0123456789abcdef0"
     subnet_id              = "subnet-0123456789abcdef0"

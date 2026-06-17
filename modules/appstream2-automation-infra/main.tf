@@ -182,12 +182,13 @@ resource "aws_iam_role_policy_attachment" "appstream_service_access" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonAppStreamServiceAccess"
 }
 
-# SSM Document for package installation
+# SSM Documents for tenant-specific image customization
 resource "aws_ssm_document" "appstream_setup" {
-  name          = "${var.project_name}-setup-document"
-  document_type = "Command"
+  for_each        = var.ssm_document_sources
+  name            = "${var.project_name}-setup-document-${each.key}"
+  document_type   = "Command"
   document_format = "JSON"
-  content       = file(var.doc_source)
+  content         = file(each.value)
 }
 
 # Step Function State Machine
@@ -199,7 +200,6 @@ resource "aws_sfn_state_machine" "appstream_automation" {
   definition = templatefile(
     var.stepfn_definition_file,
     {
-      SSMDocName = aws_ssm_document.appstream_setup.name
       AppStreamInstanceRoleArn = aws_iam_role.appstream_instance_role.arn
       LiveAccountId      = var.live_account_id
       PreliveAccountId   = var.prelive_account_id

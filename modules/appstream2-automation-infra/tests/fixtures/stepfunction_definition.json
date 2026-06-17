@@ -5,7 +5,7 @@
     "Complete": {
       "Type": "Pass",
       "Result": {
-        "ssmDocName": "${SSMDocName}",
+        "ssmDocNamePath": "$.SSMDocumentName",
         "roleArn": "${AppStreamInstanceRoleArn}",
         "liveAccountId": "${LiveAccountId}",
         "preliveAccountId": "${PreliveAccountId}"
