@@ -59,6 +59,11 @@ run "plan_succeeds_with_required_inputs" {
   }
 
   assert {
+    condition     = aws_sfn_state_machine.appstream_automation.tracing_configuration[0].enabled == true
+    error_message = "State machine X-Ray tracing should be enabled"
+  }
+
+  assert {
     condition     = aws_cloudwatch_log_group.sfn_logs.retention_in_days == 365
     error_message = "State machine log group retention should be 365 days"
   }

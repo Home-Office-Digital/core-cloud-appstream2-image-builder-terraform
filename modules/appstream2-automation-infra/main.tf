@@ -16,6 +16,7 @@ resource "aws_iam_role" "step_function_role" {
   })
 }
 
+#checkov:skip=CKV_AWS_355:Describe APIs used by Step Functions (EC2/SSM) require wildcard resources and cannot be resource-scoped.
 resource "aws_iam_policy" "step_function_policy" {
   name   = "${var.project_name}-step-function-policy"
   policy = jsonencode({
@@ -211,6 +212,10 @@ resource "aws_sfn_state_machine" "appstream_automation" {
     level                  = "ALL"
     log_destination        = "${aws_cloudwatch_log_group.sfn_logs.arn}:*" 
   }
+
+  tracing_configuration {
+    enabled = true
+  }
 }
 
 resource "aws_cloudwatch_log_group" "sfn_logs" {
@@ -315,6 +320,7 @@ resource "aws_kms_alias" "sfn_logs" {
 }
 
 # IAM Policy for Step Functions logging — wraps the data source into an actual policy
+#checkov:skip=CKV_AWS_355:CloudWatch Logs delivery APIs used here require wildcard resources.
 resource "aws_iam_policy" "sfn_logging" {
   name   = "${var.project_name}-sfn-logging-policy"
   policy = data.aws_iam_policy_document.sfn_logging.json
