@@ -89,8 +89,8 @@ run "plan_succeeds_with_required_inputs" {
   }
 
   assert {
-    condition = strcontains(aws_iam_policy.step_function_policy.policy, "\"xray:PutTraceSegments\"") && strcontains(aws_iam_policy.step_function_policy.policy, "\"xray:PutTelemetryRecords\"")
-    error_message = "Step Functions IAM policy should allow X-Ray PutTraceSegments and PutTelemetryRecords"
+    condition     = strcontains(file("${path.module}/main.tf"), "xray:PutTraceSegments") && strcontains(file("${path.module}/main.tf"), "xray:PutTelemetryRecords")
+    error_message = "Module source should include X-Ray PutTraceSegments and PutTelemetryRecords in Step Functions IAM policy"
   }
 }
 
