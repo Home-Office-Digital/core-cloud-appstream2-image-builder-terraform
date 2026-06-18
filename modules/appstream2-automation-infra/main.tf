@@ -18,15 +18,15 @@ resource "aws_iam_role" "step_function_role" {
 
 #checkov:skip=CKV_AWS_355:Describe APIs used by Step Functions (EC2/SSM) require wildcard resources and cannot be resource-scoped.
 resource "aws_iam_policy" "step_function_policy" {
-  name   = "${var.project_name}-step-function-policy"
+  name = "${var.project_name}-step-function-policy"
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
 
       # Allow AppStream Image Builder & Image actions, scoped to account
       {
-        Effect   = "Allow"
-        Action   = [
+        Effect = "Allow"
+        Action = [
           "appstream:CreateImageBuilder",
           "appstream:DeleteImageBuilder",
           "appstream:DescribeImageBuilders",
@@ -42,8 +42,8 @@ resource "aws_iam_policy" "step_function_policy" {
 
       # SSM permissions for the RunSSMCommand step
       {
-        Effect   = "Allow"
-        Action   = [
+        Effect = "Allow"
+        Action = [
           "ssm:SendCommand",
           "ssm:GetCommandInvocation"
         ]
@@ -60,8 +60,8 @@ resource "aws_iam_policy" "step_function_policy" {
       },
       # Allow Step-function-role to perform EC2DescribeInstances on Builder Instances
       {
-        Effect   = "Allow"
-        Action   = [
+        Effect = "Allow"
+        Action = [
           "ec2:DescribeInstances",
           "ec2:DescribeInstanceStatus",
           "ec2:DescribeInstanceAttribute",
@@ -117,21 +117,21 @@ resource "aws_iam_role" "appstream_instance_role" {
 }
 
 resource "aws_iam_policy" "appstream_instance_policy" {
-  name   = "${var.project_name}-appstream-instance-policy"
+  name = "${var.project_name}-appstream-instance-policy"
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
       {
-        Effect   = "Allow"
-        Action   = [
+        Effect = "Allow"
+        Action = [
           "ssm:UpdateInstanceInformation",
           "ssm:SendCommand"
         ]
         Resource = "arn:aws:ssm:${var.aws_region}:${var.account_id}:managed-instance/*"
       },
       {
-        Effect   = "Allow"
-        Action   = [
+        Effect = "Allow"
+        Action = [
           "ssmmessages:CreateControlChannel",
           "ssmmessages:CreateDataChannel",
           "ssmmessages:OpenControlChannel",
@@ -151,11 +151,11 @@ resource "aws_iam_policy" "appstream_instance_policy" {
           "kms:Decrypt",
           "kms:DescribeKey",
           "ssm:GetParameter"
-      ]
-      Resource = [
-        aws_kms_key.sfn_logs.arn,
-        "arn:aws:ssm:${var.aws_region}:${var.account_id}:parameter/${var.project_name}/appstream/*"
-      ]
+        ]
+        Resource = [
+          aws_kms_key.sfn_logs.arn,
+          "arn:aws:ssm:${var.aws_region}:${var.account_id}:parameter/${var.project_name}/appstream/*"
+        ]
       }
     ]
   })
@@ -194,27 +194,27 @@ resource "aws_ssm_document" "appstream_setup" {
 
 # Step Function State Machine
 resource "aws_sfn_state_machine" "appstream_automation" {
-  name       = "${var.project_name}-state-machine"
-  role_arn   = aws_iam_role.step_function_role.arn
+  name     = "${var.project_name}-state-machine"
+  role_arn = aws_iam_role.step_function_role.arn
 
-  
+  # Keep tracing enabled to satisfy security/compliance controls.
+  tracing_configuration {
+    enabled = true
+  }
+
   definition = templatefile(
     var.stepfn_definition_file,
     {
       AppStreamInstanceRoleArn = aws_iam_role.appstream_instance_role.arn
-      LiveAccountId      = var.live_account_id
-      PreliveAccountId   = var.prelive_account_id
+      LiveAccountId            = var.live_account_id
+      PreliveAccountId         = var.prelive_account_id
     }
   )
 
   logging_configuration {
     include_execution_data = true
     level                  = "ALL"
-    log_destination        = "${aws_cloudwatch_log_group.sfn_logs.arn}:*" 
-  }
-
-  tracing_configuration {
-    enabled = true
+    log_destination        = "${aws_cloudwatch_log_group.sfn_logs.arn}:*"
   }
 }
 
@@ -252,12 +252,12 @@ resource "aws_iam_role_policy_attachment" "step_function_logging_policy_attachme
 resource "aws_ssm_parameter" "banner_message" {
   name        = "/${var.project_name}/appstream/banner-message"
   type        = "SecureString"
-  key_id     = aws_kms_key.sfn_logs.arn
+  key_id      = aws_kms_key.sfn_logs.arn
   description = "Legal banner message displayed at AppStream session start"
   value       = var.banner_message
 
   lifecycle {
-    ignore_changes = [value]  # ← prevents Terraform overwriting manual updates
+    ignore_changes = [value] # ← prevents Terraform overwriting manual updates
   }
 }
 
