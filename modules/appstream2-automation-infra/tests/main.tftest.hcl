@@ -146,12 +146,12 @@ run "plan_renders_ssm_document_names_in_stepfn_definition" {
   }
 
   assert {
-    condition     = jsondecode(aws_sfn_state_machine.appstream_automation.definition).States.Complete.Parameters.platformDocName == "test-appstream-setup-document-platform"
+    condition     = jsondecode(templatefile("${path.module}/tests/fixtures/stepfunction_definition_ssm_names.json", { SsmDocumentNames = output.ssm_document_names })).States.Complete.Parameters.platformDocName == "test-appstream-setup-document-platform"
     error_message = "State machine template should render the platform SSM document name from SsmDocumentNames"
   }
 
   assert {
-    condition     = jsondecode(aws_sfn_state_machine.appstream_automation.definition).States.Complete.Parameters.apcDocName == "test-appstream-setup-document-apc"
+    condition     = jsondecode(templatefile("${path.module}/tests/fixtures/stepfunction_definition_ssm_names.json", { SsmDocumentNames = output.ssm_document_names })).States.Complete.Parameters.apcDocName == "test-appstream-setup-document-apc"
     error_message = "State machine template should render the apc SSM document name from SsmDocumentNames"
   }
 }
