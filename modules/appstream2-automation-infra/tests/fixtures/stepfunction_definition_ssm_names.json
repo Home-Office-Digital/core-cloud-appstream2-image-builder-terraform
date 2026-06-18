@@ -5,8 +5,8 @@
     "Complete": {
       "Type": "Pass",
       "Parameters": {
-        "platformDocName": "${SsmDocumentNames[\"platform\"]}",
-        "apcDocName": "${SsmDocumentNames[\"apc\"]}"
+        "platformDocName": "${SsmDocumentNames.platform}",
+        "apcDocName": "${SsmDocumentNames.apc}"
       },
       "End": true
     }
