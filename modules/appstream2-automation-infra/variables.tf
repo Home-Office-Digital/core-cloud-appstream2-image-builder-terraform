@@ -62,6 +62,24 @@ variable "ssm_document_sources" {
     ])
     error_message = "ssm_document_sources must contain at least one tenant mapped to a non-empty .json file path."
   }
+
+  validation {
+    condition = alltrue([
+      for tenant in keys(var.ssm_document_sources) : (
+        length(trimspace(tenant)) > 0 && can(regex("^[A-Za-z0-9_.-]+$", tenant))
+      )
+    ])
+    error_message = "ssm_document_sources tenant keys must be non-empty and contain only letters, numbers, underscore, period, or hyphen."
+  }
+
+  validation {
+    condition = alltrue([
+      for tenant in keys(var.ssm_document_sources) : (
+        length(tenant) <= 49
+      )
+    ])
+    error_message = "Each tenant key must be 49 characters or fewer so generated SSM document names stay within AWS's 128-character limit for all valid project_name values."
+  }
 }
 
 variable "vpc_id" {

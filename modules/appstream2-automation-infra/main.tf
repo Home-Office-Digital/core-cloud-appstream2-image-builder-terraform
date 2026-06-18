@@ -86,6 +86,15 @@ resource "aws_iam_policy" "step_function_policy" {
         ]
         Resource = aws_kms_key.sfn_logs.arn
       },
+      # Required for Step Functions X-Ray tracing when tracing_configuration is enabled
+      {
+        Effect = "Allow"
+        Action = [
+          "xray:PutTraceSegments",
+          "xray:PutTelemetryRecords"
+        ]
+        Resource = "*"
+      },
     ]
   })
 }

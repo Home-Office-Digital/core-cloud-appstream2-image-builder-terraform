@@ -87,6 +87,11 @@ run "plan_succeeds_with_required_inputs" {
     condition     = aws_iam_role.step_function_role.name == "test-appstream-step-function-role"
     error_message = "Step Functions IAM role name should include the project name"
   }
+
+  assert {
+    condition = strcontains(aws_iam_policy.step_function_policy.policy, "\"xray:PutTraceSegments\"") && strcontains(aws_iam_policy.step_function_policy.policy, "\"xray:PutTelemetryRecords\"")
+    error_message = "Step Functions IAM policy should allow X-Ray PutTraceSegments and PutTelemetryRecords"
+  }
 }
 
 run "plan_uses_default_project_name" {
@@ -216,5 +221,55 @@ run "plan_fails_with_invalid_security_group_id" {
 
   expect_failures = [
     var.security_group_id,
+  ]
+}
+
+run "plan_fails_with_invalid_tenant_key" {
+  command = plan
+
+  variables {
+    project_name          = "test-appstream"
+    aws_region            = "eu-west-2"
+    account_id            = "111111111111"
+    base_image_name       = "AppStream-RockyLinux8-2026-05-01"
+    live_account_id       = "222222222222"
+    prelive_account_id    = "333333333333"
+    ssm_document_sources  = {
+      "bad key" = "tests/fixtures/ssm-document.json"
+    }
+    stepfn_definition_file = "tests/fixtures/stepfunction_definition.json"
+    vpc_id                 = "vpc-0123456789abcdef0"
+    subnet_id              = "subnet-0123456789abcdef0"
+    security_group_id      = "sg-0123456789abcdef0"
+    banner_message         = "Authorised use only"
+  }
+
+  expect_failures = [
+    var.ssm_document_sources,
+  ]
+}
+
+run "plan_fails_with_overlong_computed_ssm_document_name" {
+  command = plan
+
+  variables {
+    project_name         = "test-appstream"
+    aws_region           = "eu-west-2"
+    account_id           = "111111111111"
+    base_image_name      = "AppStream-RockyLinux8-2026-05-01"
+    live_account_id      = "222222222222"
+    prelive_account_id   = "333333333333"
+    ssm_document_sources = {
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" = "tests/fixtures/ssm-document.json"
+    }
+    stepfn_definition_file = "tests/fixtures/stepfunction_definition.json"
+    vpc_id                 = "vpc-0123456789abcdef0"
+    subnet_id              = "subnet-0123456789abcdef0"
+    security_group_id      = "sg-0123456789abcdef0"
+    banner_message         = "Authorised use only"
+  }
+
+  expect_failures = [
+    var.ssm_document_sources,
   ]
 }
