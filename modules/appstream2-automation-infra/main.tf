@@ -217,6 +217,8 @@ resource "aws_sfn_state_machine" "appstream_automation" {
       AppStreamInstanceRoleArn = aws_iam_role.appstream_instance_role.arn
       LiveAccountId            = var.live_account_id
       PreliveAccountId         = var.prelive_account_id
+      # Expose Terraform-managed tenant SSM document names to the state machine template.
+      SsmDocumentNames = { for tenant, doc in aws_ssm_document.appstream_setup : tenant => doc.name }
     }
   )
 

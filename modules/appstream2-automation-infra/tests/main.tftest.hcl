@@ -124,6 +124,38 @@ run "plan_uses_default_project_name" {
   }
 }
 
+run "plan_renders_ssm_document_names_in_stepfn_definition" {
+  command = plan
+
+  variables {
+    project_name         = "test-appstream"
+    aws_region           = "eu-west-2"
+    account_id           = "111111111111"
+    base_image_name      = "AppStream-RockyLinux8-2026-05-01"
+    live_account_id      = "222222222222"
+    prelive_account_id   = "333333333333"
+    ssm_document_sources = {
+      platform = "tests/fixtures/ssm-document.json"
+      apc      = "tests/fixtures/ssm-document.json"
+    }
+    stepfn_definition_file = "tests/fixtures/stepfunction_definition_ssm_names.json"
+    vpc_id                 = "vpc-0123456789abcdef0"
+    subnet_id              = "subnet-0123456789abcdef0"
+    security_group_id      = "sg-0123456789abcdef0"
+    banner_message         = "Authorised use only"
+  }
+
+  assert {
+    condition     = jsondecode(aws_sfn_state_machine.appstream_automation.definition).States.Complete.Parameters.platformDocName == "test-appstream-setup-document-platform"
+    error_message = "State machine template should render the platform SSM document name from SsmDocumentNames"
+  }
+
+  assert {
+    condition     = jsondecode(aws_sfn_state_machine.appstream_automation.definition).States.Complete.Parameters.apcDocName == "test-appstream-setup-document-apc"
+    error_message = "State machine template should render the apc SSM document name from SsmDocumentNames"
+  }
+}
+
 run "plan_fails_with_invalid_live_account_id" {
   command = plan
 

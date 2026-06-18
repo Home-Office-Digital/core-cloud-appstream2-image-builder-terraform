@@ -2,6 +2,15 @@
 
 This module provisions the core infrastructure used to automate AppStream image build workflows, including IAM roles/policies, Terraform-managed tenant SSM documents, and a Step Functions state machine.
 
+The Step Functions definition template receives these variables via `templatefile`:
+
+- `AppStreamInstanceRoleArn`
+- `LiveAccountId`
+- `PreliveAccountId`
+- `SsmDocumentNames` (map of tenant key to Terraform-managed SSM document name)
+
+In JSON templates, render the full map with `${jsonencode(SsmDocumentNames)}` as an unquoted template expression, or reference a specific tenant (for example `${SsmDocumentNames["platform"]}`).
+
 ## Testing
 
 Terraform native tests for this module are defined in:
@@ -12,6 +21,7 @@ Fixture files used by tests are in:
 
 - `tests/fixtures/ssm-document.json`
 - `tests/fixtures/stepfunction_definition.json`
+- `tests/fixtures/stepfunction_definition_ssm_names.json`
 
 ### Run Tests Locally
 
