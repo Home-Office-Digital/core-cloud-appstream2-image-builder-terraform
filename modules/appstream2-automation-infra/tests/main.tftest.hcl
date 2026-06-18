@@ -138,7 +138,7 @@ run "plan_renders_ssm_document_names_in_stepfn_definition" {
       platform = "tests/fixtures/ssm-document.json"
       apc      = "tests/fixtures/ssm-document.json"
     }
-    stepfn_definition_file = "tests/fixtures/stepfunction_definition_ssm_names.json"
+    stepfn_definition_file = "tests/fixtures/stepfunction_definition.json"
     vpc_id                 = "vpc-0123456789abcdef0"
     subnet_id              = "subnet-0123456789abcdef0"
     security_group_id      = "sg-0123456789abcdef0"
