@@ -18,19 +18,25 @@ on:
       - reopened
       - synchronize
 
-permissions:
-  contents: read
-  id-token: write
-  actions: read
-  security-events: write
+permissions: read-all
 
 jobs:
   checkov-scan:
     uses: UKHomeOffice/core-cloud-workflow-checkov-sast-scan/.github/workflows/checkov-scan-base.yaml@1.7.0
+    permissions:
+      contents: read
+      id-token: write
+      actions: read
+      security-events: write
 
   sonarqube-scanner:
     name: SonarQube Scan
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      actions: read
+      security-events: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4

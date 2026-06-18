@@ -1,0 +1,16 @@
+{
+  "Comment": "Test fixture proving SsmDocumentNames template variable wiring",
+  "StartAt": "Complete",
+  "States": {
+    "Complete": {
+      "Type": "Pass",
+      "Parameters": {
+        "platformDocName": "${SsmDocumentNames.platform}",
+        "apcDocName": "${SsmDocumentNames.apc}"
+      },
+      "End": true
+    }
+  }
+}
+
+

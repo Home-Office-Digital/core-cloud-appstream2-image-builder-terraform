@@ -50,13 +50,35 @@ variable "project_name" {
   }
 }
 
-variable "doc_source" {
-  description = "Path to the SSM document JSON (AppStreamImageAssistant-automation.json)"
-  type        = string
+variable "ssm_document_sources" {
+  description = "Map of tenant names to SSM document JSON paths (for example platform/apc)."
+  type        = map(string)
 
   validation {
-    condition     = length(trimspace(var.doc_source)) > 0 && can(regex("\\.json$", var.doc_source))
-    error_message = "doc_source must be a non-empty path to a .json file."
+    condition = length(var.ssm_document_sources) > 0 && alltrue([
+      for doc_path in values(var.ssm_document_sources) : (
+        length(trimspace(doc_path)) > 0 && endswith(doc_path, ".json")
+      )
+    ])
+    error_message = "ssm_document_sources must contain at least one tenant mapped to a non-empty .json file path."
+  }
+
+  validation {
+    condition = alltrue([
+      for tenant in keys(var.ssm_document_sources) : (
+        length(trimspace(tenant)) > 0 && can(regex("^[A-Za-z0-9_.-]+$", tenant))
+      )
+    ])
+    error_message = "ssm_document_sources tenant keys must be non-empty and contain only letters, numbers, underscore, period, or hyphen."
+  }
+
+  validation {
+    condition = alltrue([
+      for tenant in keys(var.ssm_document_sources) : (
+        length(tenant) <= 49
+      )
+    ])
+    error_message = "Each tenant key must be 49 characters or fewer so generated SSM document names stay within AWS's 128-character limit for all valid project_name values."
   }
 }
 

@@ -4,8 +4,8 @@
   "States": {
     "Complete": {
       "Type": "Pass",
-      "Result": {
-        "ssmDocName": "${SSMDocName}",
+      "Parameters": {
+        "ssmDocNamePath.$": "$.SSMDocumentName",
         "roleArn": "${AppStreamInstanceRoleArn}",
         "liveAccountId": "${LiveAccountId}",
         "preliveAccountId": "${PreliveAccountId}"
