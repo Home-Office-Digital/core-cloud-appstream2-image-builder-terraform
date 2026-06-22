@@ -50,35 +50,28 @@ variable "project_name" {
   }
 }
 
-variable "ssm_document_sources" {
-  description = "Map of tenant names to SSM document JSON paths (for example platform/apc)."
-  type        = map(string)
+variable "tenant_key" {
+  description = "Single tenant this stack belongs to (for example 'platform', 'apc', 'xyz'). Drives the DynamoDB lock Tenant key, the SSM document name, and the Image Builder name."
+  type        = string
 
   validation {
-    condition = length(var.ssm_document_sources) > 0 && alltrue([
-      for doc_path in values(var.ssm_document_sources) : (
-        length(trimspace(doc_path)) > 0 && endswith(doc_path, ".json")
-      )
-    ])
-    error_message = "ssm_document_sources must contain at least one tenant mapped to a non-empty .json file path."
+    condition     = length(trimspace(var.tenant_key)) > 0 && can(regex("^[A-Za-z0-9_.-]+$", var.tenant_key))
+    error_message = "tenant_key must be non-empty and contain only letters, numbers, underscore, period, or hyphen."
   }
 
   validation {
-    condition = alltrue([
-      for tenant in keys(var.ssm_document_sources) : (
-        length(trimspace(tenant)) > 0 && can(regex("^[A-Za-z0-9_.-]+$", tenant))
-      )
-    ])
-    error_message = "ssm_document_sources tenant keys must be non-empty and contain only letters, numbers, underscore, period, or hyphen."
+    condition     = length(var.tenant_key) <= 49
+    error_message = "tenant_key must be 49 characters or fewer so the generated SSM document name stays within AWS's 128-character limit for all valid project_name values."
   }
+}
+
+variable "ssm_document_source" {
+  description = "Path to this tenant's SSM document JSON (for example tenants/apc/ssm/automation.json). One stack manages exactly one tenant's document"
+  type        = string
 
   validation {
-    condition = alltrue([
-      for tenant in keys(var.ssm_document_sources) : (
-        length(tenant) <= 49
-      )
-    ])
-    error_message = "Each tenant key must be 49 characters or fewer so generated SSM document names stay within AWS's 128-character limit for all valid project_name values."
+    condition     = length(trimspace(var.ssm_document_source)) > 0 && endswith(var.ssm_document_source, ".json")
+    error_message = "ssm_document_source must be a non-empty path to a .json file."
   }
 }
 
@@ -112,7 +105,7 @@ variable "security_group_id" {
 
 variable "stepfn_definition_file" {
   type        = string
-  description = "Path to the Step Functions definition JSON"
+  description = "Path to the Step Functions ASL definition JSON (appstream-build-orchestrator.asl.json)."
 
   validation {
     condition     = length(trimspace(var.stepfn_definition_file)) > 0 && can(regex("\\.json$", var.stepfn_definition_file))
@@ -140,3 +133,29 @@ variable "banner_message" {
   }
 }
 
+variable "artifact_bucket_name" {
+  description = "Name of the existing S3 bucket holding versioned platform/tenant script artifacts. Created once, shared across all tenant stacks — not managed by this module."
+  type        = string
+
+  validation {
+    condition     = length(trimspace(var.artifact_bucket_name)) > 0
+    error_message = "artifact_bucket_name must not be empty."
+  }
+}
+
+variable "build_lock_table_name" {
+  description = "Name of the shared DynamoDB build-lock table. Created once, shared across all tenant stacks — not managed by this module."
+  type        = string
+  default     = "AppStreamBuildLocks"
+
+  validation {
+    condition     = length(trimspace(var.build_lock_table_name)) > 0
+    error_message = "build_lock_table_name must not be empty."
+  }
+}
+
+variable "create_shared_resources" {
+  description = "Whether this stack creates the shared, account-wide resources (DynamoDB lock table, S3 artifact bucket). Set true on exactly one tenant stack — conventionally 'platform' — and false everywhere else, so the shared resources aren't duplicated or fought over across tenant stacks."
+  type        = bool
+  default     = false
+}

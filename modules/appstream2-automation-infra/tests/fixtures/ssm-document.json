@@ -1,14 +1,12 @@
 {
   "schemaVersion": "2.2",
-  "description": "Test SSM document for terraform test",
+  "description": "Minimal fixture document for terraform test — not the real automation.json",
   "mainSteps": [
     {
       "action": "aws:runShellScript",
-      "name": "noop",
+      "name": "Noop",
       "inputs": {
-        "runCommand": [
-          "echo terraform-test"
-        ]
+        "runCommand": ["echo test fixture"]
       }
     }
   ]
