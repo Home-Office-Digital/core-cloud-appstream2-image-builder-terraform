@@ -477,25 +477,6 @@ resource "aws_cloudwatch_log_group" "sfn_logs" {
   kms_key_id        = aws_kms_key.sfn_logs.arn
 }
 
-data "aws_iam_policy_document" "sfn_logging" {
-  statement {
-    effect = "Allow"
-
-    actions = [
-      "logs:CreateLogDelivery",
-      "logs:GetLogDelivery",
-      "logs:UpdateLogDelivery",
-      "logs:DeleteLogDelivery",
-      "logs:ListLogDeliveries",
-      "logs:PutResourcePolicy",
-      "logs:DescribeResourcePolicies",
-      "logs:DescribeLogGroups"
-    ]
-
-    resources = ["*"]
-  }
-}
-
 resource "aws_iam_role_policy_attachment" "step_function_logging_policy_attachment" {
   role       = aws_iam_role.step_function_role.name
   policy_arn = aws_iam_policy.sfn_logging.arn
@@ -572,9 +553,27 @@ resource "aws_kms_alias" "sfn_logs" {
   target_key_id = aws_kms_key.sfn_logs.key_id
 }
 
-# IAM Policy for Step Functions logging — wraps the data source into an actual policy
+# IAM Policy for Step Functions logging.
 #checkov:skip=CKV_AWS_355:CloudWatch Logs delivery APIs used here require wildcard resources.
 resource "aws_iam_policy" "sfn_logging" {
-  name   = "${var.project_name}-sfn-logging-policy"
-  policy = data.aws_iam_policy_document.sfn_logging.json
+  name = "${var.project_name}-sfn-logging-policy"
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogDelivery",
+          "logs:GetLogDelivery",
+          "logs:UpdateLogDelivery",
+          "logs:DeleteLogDelivery",
+          "logs:ListLogDeliveries",
+          "logs:PutResourcePolicy",
+          "logs:DescribeResourcePolicies",
+          "logs:DescribeLogGroups"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
 }

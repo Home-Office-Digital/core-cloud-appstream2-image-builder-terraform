@@ -1,48 +1,82 @@
-# tests/main.tftest.hcl
-#
-# Rewritten from scratch against the new single-tenant module surface
-# (design doc Section 7, item 2). The previous suite exercised the removed
-# ssm_document_sources map(string)/for_each — it would fail immediately
-# against this module and has been deleted rather than left in a broken
-# state.
-#
-# CORRECTION #2: a `provider "aws" {}` block with placeholder static
-# credentials is NOT sufficient. skip_credentials_validation/
-# skip_requesting_account_id/skip_metadata_api_check only suppress
-# Terraform's own pre-flight checks — they do nothing to stop `data` sources
-# from making real API calls. This module's two real `data` sources
-# (data.aws_s3_bucket.artifacts, data.aws_dynamodb_table.build_locks — read
-# when create_shared_resources = false) genuinely hit AWS with the fake
-# credentials and were correctly rejected. Fixed with mock_provider, which
-# replaces the AWS provider entirely.
-#
-# CORRECTION #3: the persisting "no file exists at ./fixtures/..." errors
-# were NOT a side effect of the data source failures, and NOT a CI working-
-# directory issue (the CI workflow's `-chdir=modules/appstream2-automation-infra`
-# was always correct — confirmed against reusable-terraform-test.yaml).
-# The actual cause, confirmed against HashiCorp's own documentation: "All
-# references to, and absolute file paths within, the testing files should
-# be relative to the main configuration directory" — i.e. relative to
-# modules/appstream2-automation-infra/ (where main.tf lives), NOT relative
-# to tests/ (where this file lives). The paths needed the tests/ segment
-# included (./tests/fixtures/... not ./fixtures/...) from the very first
-# version of this file. Two wrong diagnoses before finding the documented
-# rule — worth that being visible here rather than quietly fixed.
-#
-# Also found in the same run: mock_provider "aws" {} mocks every AWS-
-# provider resource and data source uniformly, with no way to exclude one
-# selectively via the mock_provider block itself.
-# data.aws_iam_policy_document.sfn_logging is a pure local computation (no
-# API call, ever, even outside tests) but got mocked anyway, returning
-# synthetic data instead of evaluating its statement blocks — which broke
-# aws_iam_policy.sfn_logging's policy argument ("not a JSON object").
-# override_data (below) exempts this one data source so it computes for
-# real while everything else AWS-related stays mocked.
-mock_provider "aws" {}
+override_data {
+  target = data.aws_dynamodb_table.build_locks[0]
+  values = {
+    arn = "arn:aws:dynamodb:eu-west-2:979566283533:table/AppStreamBuildLocks"
+  }
+}
 
 override_data {
-  target = data.aws_iam_policy_document.sfn_logging
+  target = data.aws_s3_bucket.artifacts[0]
+  values = {
+    arn = "arn:aws:s3:::appstream-artifacts-979566283533-eu-west-2"
+  }
 }
+
+override_resource {
+  target = aws_dynamodb_table.build_locks[0]
+  values = {
+    arn = "arn:aws:dynamodb:eu-west-2:979566283533:table/AppStreamBuildLocks"
+  }
+}
+
+override_resource {
+  target = aws_s3_bucket.artifacts[0]
+  values = {
+    arn = "arn:aws:s3:::appstream-artifacts-979566283533-eu-west-2"
+  }
+}
+
+override_resource {
+  target = aws_iam_role.appstream_instance_role
+  values = {
+    arn = "arn:aws:iam::979566283533:role/cc-pam-apc-appstream-instance-role"
+  }
+}
+
+override_resource {
+  target = aws_iam_role.step_function_role
+  values = {
+    arn = "arn:aws:iam::979566283533:role/cc-pam-apc-step-function-role"
+  }
+}
+
+override_resource {
+  target = aws_iam_policy.step_function_policy
+  values = {
+    arn = "arn:aws:iam::979566283533:policy/cc-pam-apc-step-function-policy"
+  }
+}
+
+override_resource {
+  target = aws_iam_policy.appstream_instance_policy
+  values = {
+    arn = "arn:aws:iam::979566283533:policy/cc-pam-apc-appstream-instance-policy"
+  }
+}
+
+override_resource {
+  target = aws_iam_policy.sfn_logging
+  values = {
+    arn = "arn:aws:iam::979566283533:policy/cc-pam-apc-sfn-logging-policy"
+  }
+}
+
+override_resource {
+  target = aws_kms_key.sfn_logs
+  values = {
+    arn    = "arn:aws:kms:eu-west-2:979566283533:key/00000000-0000-0000-0000-000000000000"
+    key_id = "00000000-0000-0000-0000-000000000000"
+  }
+}
+
+override_resource {
+  target = aws_cloudwatch_log_group.sfn_logs
+  values = {
+    arn = "arn:aws:logs:eu-west-2:979566283533:log-group:/aws/states/cc-pam-apc-state-machine"
+  }
+}
+
+mock_provider "aws" {}
 
 variables {
   aws_region              = "eu-west-2"
@@ -56,15 +90,6 @@ variables {
   vpc_id                   = "vpc-054b75f6e02609595"
   subnet_id                = "subnet-026bf861b538b0b63"
   security_group_id        = "sg-0385fa4b97d81a336"
-  # CORRECTION #3: per HashiCorp's documented behavior ("All references to,
-  # and absolute file paths within, the testing files should be relative to
-  # the main configuration directory" — i.e. modules/appstream2-automation-infra/,
-  # where main.tf lives, NOT tests/, where this file lives), these paths
-  # were simply wrong from the very first version of this file. They were
-  # never resolved relative to this test file's own directory — they needed
-  # the tests/ segment included. The CI workflow's `-chdir` was correct and
-  # irrelevant to this specific bug; I'd misdiagnosed it as a CI working-
-  # directory issue twice before actually finding the documented rule.
   ssm_document_source      = "./tests/fixtures/ssm-document.json"
   stepfn_definition_file   = "./tests/fixtures/stepfunction_definition.json"
   artifact_bucket_name     = "appstream-artifacts-979566283533-eu-west-2"
@@ -72,10 +97,6 @@ variables {
   create_shared_resources  = false
 }
 
-# ---------------------------------------------------------------------------
-# Tenant stack (create_shared_resources = false): should NOT attempt to
-# create the DynamoDB table or S3 bucket — only read them via data sources.
-# ---------------------------------------------------------------------------
 run "tenant_stack_does_not_create_shared_resources" {
   command = plan
 
@@ -108,10 +129,6 @@ run "tenant_stack_state_machine_uses_plain_file_not_templatefile" {
   }
 }
 
-# ---------------------------------------------------------------------------
-# Platform stack (create_shared_resources = true): SHOULD create the shared
-# resources, with prevent_destroy and the lifecycle rule in place.
-# ---------------------------------------------------------------------------
 run "platform_stack_creates_shared_resources" {
   command = plan
 
@@ -137,12 +154,8 @@ run "platform_stack_creates_shared_resources" {
   }
 }
 
-# ---------------------------------------------------------------------------
-# Validate the structural IAM deny on */latest/* exists on both roles
-# (design doc Section 3.2/5.1 — enforced by IAM, not just convention).
-# ---------------------------------------------------------------------------
 run "step_function_role_denies_latest_path_reads" {
-  command = plan
+  command = apply
 
   assert {
     condition = strcontains(
@@ -162,7 +175,7 @@ run "step_function_role_denies_latest_path_reads" {
 }
 
 run "appstream_instance_role_denies_latest_path_reads" {
-  command = plan
+  command = apply
 
   assert {
     condition = strcontains(
@@ -173,9 +186,6 @@ run "appstream_instance_role_denies_latest_path_reads" {
   }
 }
 
-# ---------------------------------------------------------------------------
-# Validation failures: confirm the variable validation rules actually fire.
-# ---------------------------------------------------------------------------
 run "rejects_non_json_ssm_document_source" {
   command = plan
 
@@ -201,12 +211,6 @@ run "rejects_tenant_key_over_49_chars" {
 }
 
 run "rejects_latest_literal_in_ssm_document_source_path" {
-  # Not a variable-level validation (path content isn't checked that deeply)
-  # but documents the expectation at the test-suite level: nobody should
-  # wire ssm_document_source or stepfn_definition_file to a 'latest' alias
-  # path. This is enforced operationally by repo convention + the IAM deny
-  # above, not by a Terraform variable validation block, since the module
-  # has no way to know what a given path's contents represent.
   command = plan
 
   assert {
