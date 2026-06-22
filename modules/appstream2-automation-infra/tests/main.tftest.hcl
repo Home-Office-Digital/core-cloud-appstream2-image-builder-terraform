@@ -6,32 +6,43 @@
 # against this module and has been deleted rather than left in a broken
 # state.
 #
-# CORRECTION #2 (found via a second real CI run): a `provider "aws" {}`
-# block with placeholder static credentials is NOT sufficient. The
-# skip_credentials_validation/skip_requesting_account_id/skip_metadata_api_check
-# flags only suppress Terraform's own pre-flight checks — they do nothing to
-# stop `data` sources from making real API calls. This module has two real
-# `data` sources (data.aws_s3_bucket.artifacts, data.aws_dynamodb_table.build_locks
-# — read when create_shared_resources = false) that genuinely tried to hit
-# AWS with the fake credentials and correctly got rejected
-# (UnrecognizedClientException) or returned nothing (empty result). Worse,
-# this also caused a confusing secondary symptom: the file()-not-found
-# errors on var.stepfn_definition_file/var.ssm_document_source were NOT a
-# real path bug — the CI workflow (reusable-terraform-test.yaml) runs
-# `terraform -chdir=modules/appstream2-automation-infra test`, so
-# ./fixtures/... resolves correctly. Those errors were a side effect of the
-# data source failures aborting plan graph construction before the rest of
-# the plan (including the file() calls) ever got evaluated.
+# CORRECTION #2: a `provider "aws" {}` block with placeholder static
+# credentials is NOT sufficient. skip_credentials_validation/
+# skip_requesting_account_id/skip_metadata_api_check only suppress
+# Terraform's own pre-flight checks — they do nothing to stop `data` sources
+# from making real API calls. This module's two real `data` sources
+# (data.aws_s3_bucket.artifacts, data.aws_dynamodb_table.build_locks — read
+# when create_shared_resources = false) genuinely hit AWS with the fake
+# credentials and were correctly rejected. Fixed with mock_provider, which
+# replaces the AWS provider entirely.
 #
-# The correct fix is `mock_provider`, the test-framework feature purpose-
-# built for this: it replaces the AWS provider entirely, so no run block —
-# real or mocked resource alike — ever makes a network call or needs
-# credentials. This is also why reusable-terraform-test.yaml's `terraform
-# init -backend=false` step and complete absence of any AWS credential step
-# makes sense: this CI job is designed to be fully offline, and the test
-# file needs to honor that, not work around it with fake credentials that
-# only partially suppress real calls.
+# CORRECTION #3: the persisting "no file exists at ./fixtures/..." errors
+# were NOT a side effect of the data source failures, and NOT a CI working-
+# directory issue (the CI workflow's `-chdir=modules/appstream2-automation-infra`
+# was always correct — confirmed against reusable-terraform-test.yaml).
+# The actual cause, confirmed against HashiCorp's own documentation: "All
+# references to, and absolute file paths within, the testing files should
+# be relative to the main configuration directory" — i.e. relative to
+# modules/appstream2-automation-infra/ (where main.tf lives), NOT relative
+# to tests/ (where this file lives). The paths needed the tests/ segment
+# included (./tests/fixtures/... not ./fixtures/...) from the very first
+# version of this file. Two wrong diagnoses before finding the documented
+# rule — worth that being visible here rather than quietly fixed.
+#
+# Also found in the same run: mock_provider "aws" {} mocks every AWS-
+# provider resource and data source uniformly, with no way to exclude one
+# selectively via the mock_provider block itself.
+# data.aws_iam_policy_document.sfn_logging is a pure local computation (no
+# API call, ever, even outside tests) but got mocked anyway, returning
+# synthetic data instead of evaluating its statement blocks — which broke
+# aws_iam_policy.sfn_logging's policy argument ("not a JSON object").
+# override_data (below) exempts this one data source so it computes for
+# real while everything else AWS-related stays mocked.
 mock_provider "aws" {}
+
+override_data {
+  target = data.aws_iam_policy_document.sfn_logging
+}
 
 variables {
   aws_region              = "eu-west-2"
@@ -45,8 +56,17 @@ variables {
   vpc_id                   = "vpc-054b75f6e02609595"
   subnet_id                = "subnet-026bf861b538b0b63"
   security_group_id        = "sg-0385fa4b97d81a336"
-  ssm_document_source      = "./fixtures/ssm-document.json"
-  stepfn_definition_file   = "./fixtures/stepfunction_definition.json"
+  # CORRECTION #3: per HashiCorp's documented behavior ("All references to,
+  # and absolute file paths within, the testing files should be relative to
+  # the main configuration directory" — i.e. modules/appstream2-automation-infra/,
+  # where main.tf lives, NOT tests/, where this file lives), these paths
+  # were simply wrong from the very first version of this file. They were
+  # never resolved relative to this test file's own directory — they needed
+  # the tests/ segment included. The CI workflow's `-chdir` was correct and
+  # irrelevant to this specific bug; I'd misdiagnosed it as a CI working-
+  # directory issue twice before actually finding the documented rule.
+  ssm_document_source      = "./tests/fixtures/ssm-document.json"
+  stepfn_definition_file   = "./tests/fixtures/stepfunction_definition.json"
   artifact_bucket_name     = "appstream-artifacts-979566283533-eu-west-2"
   build_lock_table_name    = "AppStreamBuildLocks"
   create_shared_resources  = false
@@ -160,7 +180,7 @@ run "rejects_non_json_ssm_document_source" {
   command = plan
 
   variables {
-    ssm_document_source = "./fixtures/not-json.txt"
+    ssm_document_source = "./tests/fixtures/not-json.txt"
   }
 
   expect_failures = [
