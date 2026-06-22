@@ -1,30 +1,37 @@
 # tests/main.tftest.hcl
 #
 # Rewritten from scratch against the new single-tenant module surface
-# The previous suite exercised the removed
+# (design doc Section 7, item 2). The previous suite exercised the removed
 # ssm_document_sources map(string)/for_each — it would fail immediately
 # against this module and has been deleted rather than left in a broken
-# state. These tests use `command = plan`, never `apply`, so nothing here
-# creates real AWS resources or makes a real API call against any of them.
+# state.
 #
-# CORRECTION (found via a real CI run, not caught by review): `command =
-# plan` still requires the AWS provider to be *configured*, even though it
-# never round-trips to a real account for these tests — Terraform has to
-# instantiate the provider to build the plan graph at all. Outside this test
-# file, Terragrunt's generated provider.tf (root.hcl's `generate "provider"`
-# block) and your shell's real AWS credentials supply this automatically,
-# which is why `terragrunt plan`/`apply` never hit this; running `terraform
-# test` directly in CI bypasses both, and CI has no credentials to fall back
-# on. The provider block below with static placeholder credentials is
-# sufficient to satisfy that requirement without ever needing real access.
-provider "aws" {
-  region                      = "eu-west-2"
-  access_key                  = "test"
-  secret_key                  = "test"
-  skip_credentials_validation = true
-  skip_requesting_account_id  = true
-  skip_metadata_api_check     = true
-}
+# CORRECTION #2 (found via a second real CI run): a `provider "aws" {}`
+# block with placeholder static credentials is NOT sufficient. The
+# skip_credentials_validation/skip_requesting_account_id/skip_metadata_api_check
+# flags only suppress Terraform's own pre-flight checks — they do nothing to
+# stop `data` sources from making real API calls. This module has two real
+# `data` sources (data.aws_s3_bucket.artifacts, data.aws_dynamodb_table.build_locks
+# — read when create_shared_resources = false) that genuinely tried to hit
+# AWS with the fake credentials and correctly got rejected
+# (UnrecognizedClientException) or returned nothing (empty result). Worse,
+# this also caused a confusing secondary symptom: the file()-not-found
+# errors on var.stepfn_definition_file/var.ssm_document_source were NOT a
+# real path bug — the CI workflow (reusable-terraform-test.yaml) runs
+# `terraform -chdir=modules/appstream2-automation-infra test`, so
+# ./fixtures/... resolves correctly. Those errors were a side effect of the
+# data source failures aborting plan graph construction before the rest of
+# the plan (including the file() calls) ever got evaluated.
+#
+# The correct fix is `mock_provider`, the test-framework feature purpose-
+# built for this: it replaces the AWS provider entirely, so no run block —
+# real or mocked resource alike — ever makes a network call or needs
+# credentials. This is also why reusable-terraform-test.yaml's `terraform
+# init -backend=false` step and complete absence of any AWS credential step
+# makes sense: this CI job is designed to be fully offline, and the test
+# file needs to honor that, not work around it with fake credentials that
+# only partially suppress real calls.
+mock_provider "aws" {}
 
 variables {
   aws_region              = "eu-west-2"
@@ -112,6 +119,7 @@ run "platform_stack_creates_shared_resources" {
 
 # ---------------------------------------------------------------------------
 # Validate the structural IAM deny on */latest/* exists on both roles
+# (design doc Section 3.2/5.1 — enforced by IAM, not just convention).
 # ---------------------------------------------------------------------------
 run "step_function_role_denies_latest_path_reads" {
   command = plan
@@ -121,7 +129,7 @@ run "step_function_role_denies_latest_path_reads" {
       aws_iam_policy.step_function_policy.policy,
       "platform/latest/*"
     )
-    error_message = "Step Function IAM policy must explicitly deny reads to platform/latest/*"
+    error_message = "Step Function IAM policy must explicitly deny reads to platform/latest/* (design doc Section 3.2/5.1)."
   }
 
   assert {
@@ -129,7 +137,7 @@ run "step_function_role_denies_latest_path_reads" {
       aws_iam_policy.step_function_policy.policy,
       "tenants/*/latest/*"
     )
-    error_message = "Step Function IAM policy must explicitly deny reads to tenants/*/latest/*"
+    error_message = "Step Function IAM policy must explicitly deny reads to tenants/*/latest/* (design doc Section 3.2/5.1)."
   }
 }
 
@@ -141,7 +149,7 @@ run "appstream_instance_role_denies_latest_path_reads" {
       aws_iam_policy.appstream_instance_policy.policy,
       "platform/latest/*"
     )
-    error_message = "Image Builder instance IAM policy must explicitly deny reads to platform/latest/*"
+    error_message = "Image Builder instance IAM policy must explicitly deny reads to platform/latest/* (design doc Section 3.2/5.1)."
   }
 }
 
@@ -183,6 +191,6 @@ run "rejects_latest_literal_in_ssm_document_source_path" {
 
   assert {
     condition     = !strcontains(var.ssm_document_source, "/latest/")
-    error_message = "ssm_document_source should never point through a /latest/ path by convention"
+    error_message = "ssm_document_source should never point through a /latest/ path by convention (design doc Section 3.2/5.1)."
   }
 }
