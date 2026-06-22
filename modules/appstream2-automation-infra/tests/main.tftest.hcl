@@ -1,3 +1,31 @@
+# tests/main.tftest.hcl
+#
+# Rewritten from scratch against the new single-tenant module surface
+# The previous suite exercised the removed
+# ssm_document_sources map(string)/for_each — it would fail immediately
+# against this module and has been deleted rather than left in a broken
+# state. These tests use `command = plan`, never `apply`, so nothing here
+# creates real AWS resources or makes a real API call against any of them.
+#
+# CORRECTION (found via a real CI run, not caught by review): `command =
+# plan` still requires the AWS provider to be *configured*, even though it
+# never round-trips to a real account for these tests — Terraform has to
+# instantiate the provider to build the plan graph at all. Outside this test
+# file, Terragrunt's generated provider.tf (root.hcl's `generate "provider"`
+# block) and your shell's real AWS credentials supply this automatically,
+# which is why `terragrunt plan`/`apply` never hit this; running `terraform
+# test` directly in CI bypasses both, and CI has no credentials to fall back
+# on. The provider block below with static placeholder credentials is
+# sufficient to satisfy that requirement without ever needing real access.
+provider "aws" {
+  region                      = "eu-west-2"
+  access_key                  = "test"
+  secret_key                  = "test"
+  skip_credentials_validation = true
+  skip_requesting_account_id  = true
+  skip_metadata_api_check     = true
+}
+
 variables {
   aws_region              = "eu-west-2"
   account_id               = "979566283533"
@@ -84,7 +112,6 @@ run "platform_stack_creates_shared_resources" {
 
 # ---------------------------------------------------------------------------
 # Validate the structural IAM deny on */latest/* exists on both roles
-# (enforced by IAM, not just convention).
 # ---------------------------------------------------------------------------
 run "step_function_role_denies_latest_path_reads" {
   command = plan

@@ -24,6 +24,11 @@ resource "aws_iam_policy" "step_function_policy" {
     Statement = [
 
       # Allow AppStream Image Builder & Image actions, scoped to account.
+      # NOTE: there is no appstream:CreateImage API — image creation happens
+      # ON the Image Builder instance via the AppStreamImageAssistant CLI
+      # (platform/scripts/create_image.sh, run inside RunSSMInstall under the
+      # instance role below), not via a Step Functions SDK call. The Step
+      # Function only ever polls DescribeImages afterward.
       {
         Effect = "Allow"
         Action = [
@@ -301,6 +306,65 @@ resource "aws_s3_bucket" "artifacts" {
   }
 }
 
+# Access logging target for the artifact bucket (Checkov: S3 access logging).
+# A separate bucket is required — S3 does not allow a bucket to log to itself.
+resource "aws_s3_bucket" "artifacts_access_logs" {
+  count  = var.create_shared_resources ? 1 : 0
+  bucket = "${var.artifact_bucket_name}-access-logs"
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "artifacts_access_logs" {
+  count                   = var.create_shared_resources ? 1 : 0
+  bucket                  = aws_s3_bucket.artifacts_access_logs[0].id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+# Log bucket needs s3:PutObject granted to the S3 log delivery service
+# principal, scoped to this account, per AWS's standard server access
+# logging setup — without this ACL/policy grant, log delivery silently fails.
+resource "aws_s3_bucket_policy" "artifacts_access_logs" {
+  count  = var.create_shared_resources ? 1 : 0
+  bucket = aws_s3_bucket.artifacts_access_logs[0].id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "S3ServerAccessLogsPolicy"
+        Effect = "Allow"
+        Principal = {
+          Service = "logging.s3.amazonaws.com"
+        }
+        Action   = "s3:PutObject"
+        Resource = "${aws_s3_bucket.artifacts_access_logs[0].arn}/*"
+        Condition = {
+          ArnLike = {
+            "aws:SourceArn" = aws_s3_bucket.artifacts[0].arn
+          }
+          StringEquals = {
+            "aws:SourceAccount" = var.account_id
+          }
+        }
+      }
+    ]
+  })
+}
+
+resource "aws_s3_bucket_logging" "artifacts" {
+  count  = var.create_shared_resources ? 1 : 0
+  bucket = aws_s3_bucket.artifacts[0].id
+
+  target_bucket = aws_s3_bucket.artifacts_access_logs[0].id
+  target_prefix = "artifact-bucket-access-logs/"
+}
+
 resource "aws_s3_bucket_lifecycle_configuration" "artifacts" {
   count  = var.create_shared_resources ? 1 : 0
   bucket = aws_s3_bucket.artifacts[0].id
@@ -311,7 +375,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "artifacts" {
 
     # Versioned S3 prefixes here exist purely to give each concurrent build
     # an immutable pin for the duration of that build
-    # they are not a long-term audit trail; git already provides
+    # — they are not a long-term audit trail; git already provides
     # that. A pin only needs to stay stable for the life of one build, so
     # pruning prefixes well past any plausible build duration keeps the
     # bucket small without weakening the concurrency guarantee.
@@ -374,6 +438,7 @@ locals {
   build_lock_table_arn = var.create_shared_resources ? aws_dynamodb_table.build_locks[0].arn : data.aws_dynamodb_table.build_locks[0].arn
   artifact_bucket_arn  = var.create_shared_resources ? aws_s3_bucket.artifacts[0].arn : data.aws_s3_bucket.artifacts[0].arn
 
+  # Structurally enforces : nothing reading
   # through this module's IAM roles may ever resolve the latest/ pointer.
   # Only the CI/CD role (managed outside this module) may read it.
   artifact_latest_deny_resources = [
@@ -383,7 +448,7 @@ locals {
 }
 
 # Step Function State Machine
-# Definition — a pure JSON file, not a
+# Definition is the v1.2 ASL — a pure JSON file, not a
 # templatefile(). Nothing tenant-specific is baked into the definition itself;
 # every value (tenant, platformVersion, tenantVersion, builderName,
 # instanceId, imageName, liveAccountId, preliveAccountId) arrives at
