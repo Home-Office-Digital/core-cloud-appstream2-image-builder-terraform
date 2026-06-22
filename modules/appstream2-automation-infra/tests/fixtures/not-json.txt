@@ -1,0 +1,2 @@
+this is deliberately not a .json file, used to test ssm_document_source's
+endswith(".json") validation rule in variables.tf

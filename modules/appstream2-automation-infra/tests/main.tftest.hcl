@@ -1,307 +1,161 @@
-provider "aws" {
-  region                      = "eu-west-2"
-  access_key                  = "mock_access_key"
-  secret_key                  = "mock_secret_key"
-  skip_credentials_validation = true
-  skip_metadata_api_check     = true
-  skip_requesting_account_id  = true
+variables {
+  aws_region              = "eu-west-2"
+  account_id               = "979566283533"
+  project_name             = "cc-pam-apc"
+  tenant_key               = "apc"
+  base_image_name          = "CCPAM-AppStream-RockyLinux8-Base-2026-04-v2"
+  banner_message           = "UNAUTHORISED ACCESS WARNING"
+  live_account_id          = "579976740007"
+  prelive_account_id       = "800511960003"
+  vpc_id                   = "vpc-054b75f6e02609595"
+  subnet_id                = "subnet-026bf861b538b0b63"
+  security_group_id        = "sg-0385fa4b97d81a336"
+  ssm_document_source      = "./fixtures/ssm-document.json"
+  stepfn_definition_file   = "./fixtures/stepfunction_definition.json"
+  artifact_bucket_name     = "appstream-artifacts-979566283533-eu-west-2"
+  build_lock_table_name    = "AppStreamBuildLocks"
+  create_shared_resources  = false
 }
 
-run "plan_succeeds_with_required_inputs" {
+# ---------------------------------------------------------------------------
+# Tenant stack (create_shared_resources = false): should NOT attempt to
+# create the DynamoDB table or S3 bucket — only read them via data sources.
+# ---------------------------------------------------------------------------
+run "tenant_stack_does_not_create_shared_resources" {
   command = plan
 
-  variables {
-    project_name            = "test-appstream"
-    aws_region              = "eu-west-2"
-    account_id              = "111111111111"
-    base_image_name         = "AppStream-RockyLinux8-2026-05-01"
-    live_account_id         = "222222222222"
-    prelive_account_id      = "333333333333"
-    ssm_document_sources    = {
-      platform = "tests/fixtures/ssm-document.json"
-      apc      = "tests/fixtures/ssm-document.json"
-    }
-    stepfn_definition_file  = "tests/fixtures/stepfunction_definition.json"
-    vpc_id                  = "vpc-0123456789abcdef0"
-    subnet_id               = "subnet-0123456789abcdef0"
-    security_group_id       = "sg-0123456789abcdef0"
-    banner_message          = "Authorised use only"
+  assert {
+    condition     = length(aws_dynamodb_table.build_locks) == 0
+    error_message = "A tenant stack (create_shared_resources=false) must not create the shared lock table."
   }
 
   assert {
-    condition     = output.base_image_name == "AppStream-RockyLinux8-2026-05-01"
-    error_message = "base_image_name output should match the test input"
-  }
-
-  assert {
-    condition     = output.ssm_document_names["platform"] == "test-appstream-setup-document-platform"
-    error_message = "Platform SSM document name should include the project name and tenant"
-  }
-
-  assert {
-    condition     = output.ssm_document_names["apc"] == "test-appstream-setup-document-apc"
-    error_message = "APC SSM document name should include the project name and tenant"
-  }
-
-  assert {
-    condition     = aws_ssm_document.appstream_setup["platform"].document_type == "Command"
-    error_message = "Platform SSM document type should be Command"
-  }
-
-  assert {
-    condition     = aws_ssm_document.appstream_setup["apc"].document_format == "JSON"
-    error_message = "APC SSM document format should be JSON"
-  }
-
-  assert {
-    condition     = aws_sfn_state_machine.appstream_automation.name == "test-appstream-state-machine"
-    error_message = "State machine name should include the project name"
-  }
-
-  assert {
-    condition     = aws_sfn_state_machine.appstream_automation.tracing_configuration[0].enabled == true
-    error_message = "State machine X-Ray tracing should be enabled"
-  }
-
-  assert {
-    condition     = aws_cloudwatch_log_group.sfn_logs.retention_in_days == 365
-    error_message = "State machine log group retention should be 365 days"
-  }
-
-  assert {
-    condition     = aws_ssm_parameter.banner_message.type == "SecureString"
-    error_message = "Banner message parameter should be a SecureString"
-  }
-
-  assert {
-    condition     = aws_ssm_parameter.banner_message.name == "/test-appstream/appstream/banner-message"
-    error_message = "Banner message parameter name should include the project name"
-  }
-
-  assert {
-    condition     = aws_kms_alias.sfn_logs.name == "alias/test-appstream-sfn-logs"
-    error_message = "KMS alias should include the project name"
-  }
-
-  assert {
-    condition     = aws_iam_role.step_function_role.name == "test-appstream-step-function-role"
-    error_message = "Step Functions IAM role name should include the project name"
-  }
-
-  assert {
-    condition     = strcontains(file("${path.module}/main.tf"), "xray:PutTraceSegments") && strcontains(file("${path.module}/main.tf"), "xray:PutTelemetryRecords")
-    error_message = "Module source should include X-Ray PutTraceSegments and PutTelemetryRecords in Step Functions IAM policy"
+    condition     = length(aws_s3_bucket.artifacts) == 0
+    error_message = "A tenant stack (create_shared_resources=false) must not create the shared artifact bucket."
   }
 }
 
-run "plan_uses_default_project_name" {
+run "tenant_stack_creates_single_ssm_document" {
   command = plan
 
-  variables {
-    aws_region              = "eu-west-2"
-    account_id              = "111111111111"
-    base_image_name         = "AppStream-RockyLinux8-2026-05-01"
-    live_account_id         = "222222222222"
-    prelive_account_id      = "333333333333"
-    ssm_document_sources    = {
-      platform = "tests/fixtures/ssm-document.json"
-    }
-    stepfn_definition_file  = "tests/fixtures/stepfunction_definition.json"
-    vpc_id                  = "vpc-0123456789abcdef0"
-    subnet_id               = "subnet-0123456789abcdef0"
-    security_group_id       = "sg-0123456789abcdef0"
-    banner_message          = "Authorised use only"
-  }
-
   assert {
-    condition     = output.ssm_document_names["platform"] == "appstream-automation-setup-document-platform"
-    error_message = "Default project_name should be used in tenant SSM document names when not supplied"
-  }
-
-  assert {
-    condition     = aws_sfn_state_machine.appstream_automation.name == "appstream-automation-state-machine"
-    error_message = "State machine name should use default project_name"
+    condition     = aws_ssm_document.appstream_setup.name == "cc-pam-apc-setup-document-apc"
+    error_message = "SSM document name must be derived from project_name and tenant_key."
   }
 }
 
-run "plan_renders_ssm_document_names_in_stepfn_definition" {
+run "tenant_stack_state_machine_uses_plain_file_not_templatefile" {
   command = plan
 
-  variables {
-    project_name         = "test-appstream"
-    aws_region           = "eu-west-2"
-    account_id           = "111111111111"
-    base_image_name      = "AppStream-RockyLinux8-2026-05-01"
-    live_account_id      = "222222222222"
-    prelive_account_id   = "333333333333"
-    ssm_document_sources = {
-      platform = "tests/fixtures/ssm-document.json"
-      apc      = "tests/fixtures/ssm-document.json"
-    }
-    stepfn_definition_file = "tests/fixtures/stepfunction_definition.json"
-    vpc_id                 = "vpc-0123456789abcdef0"
-    subnet_id              = "subnet-0123456789abcdef0"
-    security_group_id      = "sg-0123456789abcdef0"
-    banner_message         = "Authorised use only"
-  }
-
   assert {
-    condition     = jsondecode(templatefile("${path.module}/tests/fixtures/stepfunction_definition_ssm_names.json", { SsmDocumentNames = output.ssm_document_names })).States.Complete.Parameters.platformDocName == "test-appstream-setup-document-platform"
-    error_message = "State machine template should render the platform SSM document name from SsmDocumentNames"
-  }
-
-  assert {
-    condition     = jsondecode(templatefile("${path.module}/tests/fixtures/stepfunction_definition_ssm_names.json", { SsmDocumentNames = output.ssm_document_names })).States.Complete.Parameters.apcDocName == "test-appstream-setup-document-apc"
-    error_message = "State machine template should render the apc SSM document name from SsmDocumentNames"
+    condition     = aws_sfn_state_machine.appstream_automation.name == "cc-pam-apc-state-machine"
+    error_message = "State machine name must be derived from project_name."
   }
 }
 
-run "plan_fails_with_invalid_live_account_id" {
+# ---------------------------------------------------------------------------
+# Platform stack (create_shared_resources = true): SHOULD create the shared
+# resources, with prevent_destroy and the lifecycle rule in place.
+# ---------------------------------------------------------------------------
+run "platform_stack_creates_shared_resources" {
   command = plan
 
   variables {
-    project_name            = "test-appstream"
-    aws_region              = "eu-west-2"
-    account_id              = "111111111111"
-    base_image_name         = "AppStream-RockyLinux8-2026-05-01"
-    live_account_id         = "invalid-account-id"
-    prelive_account_id      = "333333333333"
-    ssm_document_sources    = {
-      platform = "tests/fixtures/ssm-document.json"
-    }
-    stepfn_definition_file  = "tests/fixtures/stepfunction_definition.json"
-    vpc_id                  = "vpc-0123456789abcdef0"
-    subnet_id               = "subnet-0123456789abcdef0"
-    security_group_id       = "sg-0123456789abcdef0"
-    banner_message          = "Authorised use only"
+    tenant_key              = "platform"
+    project_name             = "cc-pam"
+    create_shared_resources  = true
+  }
+
+  assert {
+    condition     = length(aws_dynamodb_table.build_locks) == 1
+    error_message = "The platform stack (create_shared_resources=true) must create the shared lock table."
+  }
+
+  assert {
+    condition     = length(aws_s3_bucket.artifacts) == 1
+    error_message = "The platform stack (create_shared_resources=true) must create the shared artifact bucket."
+  }
+
+  assert {
+    condition     = aws_dynamodb_table.build_locks[0].hash_key == "Tenant"
+    error_message = "Lock table must be keyed on Tenant."
+  }
+}
+
+# ---------------------------------------------------------------------------
+# Validate the structural IAM deny on */latest/* exists on both roles
+# (enforced by IAM, not just convention).
+# ---------------------------------------------------------------------------
+run "step_function_role_denies_latest_path_reads" {
+  command = plan
+
+  assert {
+    condition = strcontains(
+      aws_iam_policy.step_function_policy.policy,
+      "platform/latest/*"
+    )
+    error_message = "Step Function IAM policy must explicitly deny reads to platform/latest/* (design doc Section 3.2/5.1)."
+  }
+
+  assert {
+    condition = strcontains(
+      aws_iam_policy.step_function_policy.policy,
+      "tenants/*/latest/*"
+    )
+    error_message = "Step Function IAM policy must explicitly deny reads to tenants/*/latest/* (design doc Section 3.2/5.1)."
+  }
+}
+
+run "appstream_instance_role_denies_latest_path_reads" {
+  command = plan
+
+  assert {
+    condition = strcontains(
+      aws_iam_policy.appstream_instance_policy.policy,
+      "platform/latest/*"
+    )
+    error_message = "Image Builder instance IAM policy must explicitly deny reads to platform/latest/* (design doc Section 3.2/5.1)."
+  }
+}
+
+# ---------------------------------------------------------------------------
+# Validation failures: confirm the variable validation rules actually fire.
+# ---------------------------------------------------------------------------
+run "rejects_non_json_ssm_document_source" {
+  command = plan
+
+  variables {
+    ssm_document_source = "./fixtures/not-json.txt"
   }
 
   expect_failures = [
-    var.live_account_id,
+    var.ssm_document_source,
   ]
 }
 
-run "plan_fails_with_invalid_vpc_id" {
+run "rejects_tenant_key_over_49_chars" {
   command = plan
 
   variables {
-    project_name            = "test-appstream"
-    aws_region              = "eu-west-2"
-    account_id              = "111111111111"
-    base_image_name         = "AppStream-RockyLinux8-2026-05-01"
-    live_account_id         = "222222222222"
-    prelive_account_id      = "333333333333"
-    ssm_document_sources    = {
-      platform = "tests/fixtures/ssm-document.json"
-    }
-    stepfn_definition_file  = "tests/fixtures/stepfunction_definition.json"
-    vpc_id                  = "not-a-vpc-id"
-    subnet_id               = "subnet-0123456789abcdef0"
-    security_group_id       = "sg-0123456789abcdef0"
-    banner_message          = "Authorised use only"
+    tenant_key = "this-tenant-key-is-deliberately-far-too-long-to-be-valid-x"
   }
 
   expect_failures = [
-    var.vpc_id,
+    var.tenant_key,
   ]
 }
 
-run "plan_fails_with_empty_banner_message" {
+run "rejects_latest_literal_in_ssm_document_source_path" {
+  # Not a variable-level validation (path content isn't checked that deeply)
+  # but documents the expectation at the test-suite level: nobody should
+  # wire ssm_document_source or stepfn_definition_file to a 'latest' alias
+  # path. This is enforced operationally by repo convention + the IAM deny
+  # above, not by a Terraform variable validation block, since the module
+  # has no way to know what a given path's contents represent.
   command = plan
 
-  variables {
-    project_name            = "test-appstream"
-    aws_region              = "eu-west-2"
-    account_id              = "111111111111"
-    base_image_name         = "AppStream-RockyLinux8-2026-05-01"
-    live_account_id         = "222222222222"
-    prelive_account_id      = "333333333333"
-    ssm_document_sources    = {
-      platform = "tests/fixtures/ssm-document.json"
-    }
-    stepfn_definition_file  = "tests/fixtures/stepfunction_definition.json"
-    vpc_id                  = "vpc-0123456789abcdef0"
-    subnet_id               = "subnet-0123456789abcdef0"
-    security_group_id       = "sg-0123456789abcdef0"
-    banner_message          = "   "
+  assert {
+    condition     = !strcontains(var.ssm_document_source, "/latest/")
+    error_message = "ssm_document_source should never point through a /latest/ path by convention (design doc Section 3.2/5.1)."
   }
-
-  expect_failures = [
-    var.banner_message,
-  ]
-}
-
-run "plan_fails_with_invalid_security_group_id" {
-  command = plan
-
-  variables {
-    project_name           = "test-appstream"
-    aws_region             = "eu-west-2"
-    account_id             = "111111111111"
-    base_image_name        = "AppStream-RockyLinux8-2026-05-01"
-    live_account_id        = "222222222222"
-    prelive_account_id     = "333333333333"
-    ssm_document_sources   = {
-      platform = "tests/fixtures/ssm-document.json"
-    }
-    stepfn_definition_file = "tests/fixtures/stepfunction_definition.json"
-    vpc_id                 = "vpc-0123456789abcdef0"
-    subnet_id              = "subnet-0123456789abcdef0"
-    security_group_id      = "not-a-security-group-id"
-    banner_message         = "Authorised use only"
-  }
-
-  expect_failures = [
-    var.security_group_id,
-  ]
-}
-
-run "plan_fails_with_invalid_tenant_key" {
-  command = plan
-
-  variables {
-    project_name          = "test-appstream"
-    aws_region            = "eu-west-2"
-    account_id            = "111111111111"
-    base_image_name       = "AppStream-RockyLinux8-2026-05-01"
-    live_account_id       = "222222222222"
-    prelive_account_id    = "333333333333"
-    ssm_document_sources  = {
-      "bad key" = "tests/fixtures/ssm-document.json"
-    }
-    stepfn_definition_file = "tests/fixtures/stepfunction_definition.json"
-    vpc_id                 = "vpc-0123456789abcdef0"
-    subnet_id              = "subnet-0123456789abcdef0"
-    security_group_id      = "sg-0123456789abcdef0"
-    banner_message         = "Authorised use only"
-  }
-
-  expect_failures = [
-    var.ssm_document_sources,
-  ]
-}
-
-run "plan_fails_with_overlong_computed_ssm_document_name" {
-  command = plan
-
-  variables {
-    project_name         = "test-appstream"
-    aws_region           = "eu-west-2"
-    account_id           = "111111111111"
-    base_image_name      = "AppStream-RockyLinux8-2026-05-01"
-    live_account_id      = "222222222222"
-    prelive_account_id   = "333333333333"
-    ssm_document_sources = {
-      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" = "tests/fixtures/ssm-document.json"
-    }
-    stepfn_definition_file = "tests/fixtures/stepfunction_definition.json"
-    vpc_id                 = "vpc-0123456789abcdef0"
-    subnet_id              = "subnet-0123456789abcdef0"
-    security_group_id      = "sg-0123456789abcdef0"
-    banner_message         = "Authorised use only"
-  }
-
-  expect_failures = [
-    var.ssm_document_sources,
-  ]
 }

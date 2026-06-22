@@ -1,16 +1,371 @@
 {
-  "Comment": "Test AppStream image automation",
-  "StartAt": "Complete",
+  "Comment": "Multi-Tenant AppStream Image Factory - v1.2 (imageName resolved upstream by CI/CD, never derived in-state)",
+  "StartAt": "AcquireLock",
   "States": {
-    "Complete": {
+
+    "AcquireLock": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:dynamodb:putItem",
+      "Parameters": {
+        "TableName": "AppStreamBuildLocks",
+        "Item": {
+          "Tenant": { "S.$": "$.tenant" },
+          "Status": { "S": "BUILDING" },
+          "ExecutionArn": { "S.$": "$$.Execution.Id" },
+          "StartedAt": { "N.$": "$$.State.EnteredTimeEpoch" },
+          "LeaseExpiry": {
+            "N.$": "States.MathAdd($$.State.EnteredTimeEpoch, 3600)"
+          }
+        },
+        "ConditionExpression": "attribute_not_exists(Tenant) OR #s = :complete OR #s = :failed OR LeaseExpiry < :now",
+        "ExpressionAttributeNames": {
+          "#s": "Status"
+        },
+        "ExpressionAttributeValues": {
+          ":complete": { "S": "COMPLETE" },
+          ":failed": { "S": "FAILED" },
+          ":now": { "N.$": "$$.State.EnteredTimeEpoch" }
+        }
+      },
+      "Catch": [
+        {
+          "ErrorEquals": ["DynamoDB.ConditionalCheckFailedException"],
+          "Next": "LockFailed"
+        },
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "Fail"
+        }
+      ],
+      "Next": "DescribeBuilder"
+    },
+
+    "LockFailed": {
+      "Type": "Fail",
+      "Error": "TenantBusy",
+      "Cause": "Another build is currently running or lease is still active"
+    },
+
+    "DescribeBuilder": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:appstream:describeImageBuilders",
+      "Parameters": {
+        "Names.$": "States.Array($.builderName)"
+      },
+      "ResultPath": "$.builder",
+      "Catch": [
+        { "ErrorEquals": ["States.ALL"], "Next": "ReleaseLockFail" }
+      ],
+      "Next": "BuilderExists"
+    },
+
+    "BuilderExists": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.builder.ImageBuilders[0].Name",
+          "IsPresent": true,
+          "Next": "IsBuilderRunning"
+        }
+      ],
+      "Default": "CreateBuilder"
+    },
+
+    "CreateBuilder": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:appstream:createImageBuilder",
+      "Parameters": {
+        "Name.$": "$.builderName",
+        "ImageName.$": "$.baseImageName",
+        "InstanceType.$": "$.instanceType",
+        "IamRoleArn.$": "$.appstreamInstanceRoleArn",
+        "VpcConfig": {
+          "SubnetIds.$": "States.Array($.subnetId)",
+          "SecurityGroupIds.$": "States.Array($.securityGroupId)"
+        }
+      },
+      "ResultPath": "$.createResult",
+      "Catch": [
+        { "ErrorEquals": ["States.ALL"], "Next": "ReleaseLockFail" }
+      ],
+      "Next": "WaitForBuilder"
+    },
+
+    "IsBuilderRunning": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.builder.ImageBuilders[0].State",
+          "StringEquals": "RUNNING",
+          "Next": "GetInstance"
+        }
+      ],
+      "Default": "StartBuilder"
+    },
+
+    "StartBuilder": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:appstream:startImageBuilder",
+      "Parameters": {
+        "Name.$": "$.builderName"
+      },
+      "ResultPath": "$.startResult",
+      "Catch": [
+        { "ErrorEquals": ["States.ALL"], "Next": "ReleaseLockFail" }
+      ],
+      "Next": "WaitForBuilder"
+    },
+
+    "WaitForBuilder": {
+      "Type": "Wait",
+      "Seconds": 60,
+      "Next": "RefreshBuilder"
+    },
+
+    "RefreshBuilder": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:appstream:describeImageBuilders",
+      "Parameters": {
+        "Names.$": "States.Array($.builderName)"
+      },
+      "ResultPath": "$.builder",
+      "Catch": [
+        { "ErrorEquals": ["States.ALL"], "Next": "ReleaseLockFail" }
+      ],
+      "Next": "IsBuilderRunning"
+    },
+
+    "GetInstance": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:ec2:describeInstances",
+      "Parameters": {
+        "Filters": [
+          {
+            "Name": "network-interface.network-interface-id",
+            "Values.$": "States.Array($.builder.ImageBuilders[0].NetworkAccessConfiguration.EniId)"
+          }
+        ]
+      },
+      "ResultPath": "$.instance",
+      "Catch": [
+        { "ErrorEquals": ["States.ALL"], "Next": "ReleaseLockFail" }
+      ],
+      "Next": "SetInstanceId"
+    },
+
+    "SetInstanceId": {
       "Type": "Pass",
       "Parameters": {
-        "ssmDocNamePath.$": "$.SSMDocumentName",
-        "roleArn": "${AppStreamInstanceRoleArn}",
-        "liveAccountId": "${LiveAccountId}",
-        "preliveAccountId": "${PreliveAccountId}"
+        "tenant.$": "$.tenant",
+        "documentName.$": "$.documentName",
+        "artifactBucket.$": "$.artifactBucket",
+        "platformVersion.$": "$.platformVersion",
+        "tenantVersion.$": "$.tenantVersion",
+        "builderName.$": "$.builderName",
+        "instanceId.$": "$.instance.Reservations[0].Instances[0].InstanceId",
+        "imageName.$": "$.imageName",
+        "bannerMessageParameter.$": "$.bannerMessageParameter",
+        "liveAccountId.$": "$.liveAccountId",
+        "preliveAccountId.$": "$.preliveAccountId"
       },
-      "End": true
+      "Next": "RunSSMInstall"
+    },
+
+    "RunSSMInstall": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:ssm:sendCommand",
+      "Parameters": {
+        "DocumentName.$": "$.documentName",
+        "InstanceIds.$": "States.Array($.instanceId)",
+        "Parameters": {
+          "ArtifactBucket.$": "States.Array($.artifactBucket)",
+          "PlatformVersion.$": "States.Array($.platformVersion)",
+          "TenantName.$": "States.Array($.tenant)",
+          "TenantVersion.$": "States.Array($.tenantVersion)",
+          "FinalImageName.$": "States.Array($.imageName)",
+          "BannerMessageParameter.$": "States.Array($.bannerMessageParameter)"
+        }
+      },
+      "ResultPath": "$.ssm",
+      "Catch": [
+        { "ErrorEquals": ["States.ALL"], "Next": "ReleaseLockFail" }
+      ],
+      "Next": "WaitForSSM"
+    },
+
+    "WaitForSSM": {
+      "Type": "Wait",
+      "Seconds": 30,
+      "Next": "GetSSMStatus"
+    },
+
+    "GetSSMStatus": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:ssm:getCommandInvocation",
+      "Parameters": {
+        "CommandId.$": "$.ssm.Command.CommandId",
+        "InstanceId.$": "$.instanceId"
+      },
+      "ResultPath": "$.ssmStatus",
+      "Catch": [
+        { "ErrorEquals": ["States.ALL"], "Next": "ReleaseLockFail" }
+      ],
+      "Next": "IsSSMComplete"
+    },
+
+    "IsSSMComplete": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.ssmStatus.Status",
+          "StringEquals": "Success",
+          "Next": "WaitForImage"
+        },
+        {
+          "Variable": "$.ssmStatus.Status",
+          "StringEquals": "Failed",
+          "Next": "ReleaseLockFail"
+        }
+      ],
+      "Default": "WaitForSSM"
+    },
+
+    "WaitForImage": {
+      "Type": "Wait",
+      "Seconds": 60,
+      "Next": "DescribeImage"
+    },
+
+    "DescribeImage": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:appstream:describeImages",
+      "Parameters": {
+        "Names.$": "States.Array($.imageName)"
+      },
+      "ResultPath": "$.imageStatus",
+      "Catch": [
+        { "ErrorEquals": ["States.ALL"], "Next": "ReleaseLockFail" }
+      ],
+      "Next": "IsImageReady"
+    },
+
+    "IsImageReady": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.imageStatus.Images[0].State",
+          "StringEquals": "AVAILABLE",
+          "Next": "ShareImage"
+        },
+        {
+          "Variable": "$.imageStatus.Images[0].State",
+          "StringEquals": "FAILED",
+          "Next": "ReleaseLockFail"
+        }
+      ],
+      "Default": "WaitForImage"
+    },
+
+    "ShareImage": {
+      "Type": "Parallel",
+      "Branches": [
+        {
+          "StartAt": "ShareLive",
+          "States": {
+            "ShareLive": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::aws-sdk:appstream:updateImagePermissions",
+              "Parameters": {
+                "Name.$": "$.imageName",
+                "SharedAccountId.$": "$.liveAccountId",
+                "ImagePermissions": {
+                  "AllowFleet": true,
+                  "AllowImageBuilder": true
+                }
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "SharePrelive",
+          "States": {
+            "SharePrelive": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::aws-sdk:appstream:updateImagePermissions",
+              "Parameters": {
+                "Name.$": "$.imageName",
+                "SharedAccountId.$": "$.preliveAccountId",
+                "ImagePermissions": {
+                  "AllowFleet": true,
+                  "AllowImageBuilder": true
+                }
+              },
+              "End": true
+            }
+          }
+        }
+      ],
+      "Catch": [
+        { "ErrorEquals": ["States.ALL"], "Next": "ReleaseLockFail" }
+      ],
+      "Next": "ReleaseLockSuccess"
+    },
+
+    "ReleaseLockSuccess": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:dynamodb:updateItem",
+      "Parameters": {
+        "TableName": "AppStreamBuildLocks",
+        "Key": {
+          "Tenant": { "S.$": "$.tenant" }
+        },
+        "UpdateExpression": "SET #s = :complete",
+        "ConditionExpression": "ExecutionArn = :exec",
+        "ExpressionAttributeNames": {
+          "#s": "Status"
+        },
+        "ExpressionAttributeValues": {
+          ":complete": { "S": "COMPLETE" },
+          ":exec": { "S.$": "$$.Execution.Id" }
+        }
+      },
+      "Catch": [
+        { "ErrorEquals": ["States.ALL"], "Next": "Success" }
+      ],
+      "Next": "Success"
+    },
+
+    "ReleaseLockFail": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:dynamodb:updateItem",
+      "Parameters": {
+        "TableName": "AppStreamBuildLocks",
+        "Key": {
+          "Tenant": { "S.$": "$.tenant" }
+        },
+        "UpdateExpression": "SET #s = :failed",
+        "ConditionExpression": "ExecutionArn = :exec",
+        "ExpressionAttributeNames": {
+          "#s": "Status"
+        },
+        "ExpressionAttributeValues": {
+          ":failed": { "S": "FAILED" },
+          ":exec": { "S.$": "$$.Execution.Id" }
+        }
+      },
+      "Catch": [
+        { "ErrorEquals": ["States.ALL"], "Next": "Fail" }
+      ],
+      "Next": "Fail"
+    },
+
+    "Fail": {
+      "Type": "Fail"
+    },
+
+    "Success": {
+      "Type": "Succeed"
     }
   }
 }

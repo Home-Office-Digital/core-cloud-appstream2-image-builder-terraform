@@ -23,13 +23,15 @@ resource "aws_iam_policy" "step_function_policy" {
     Version = "2012-10-17"
     Statement = [
 
-      # Allow AppStream Image Builder & Image actions, scoped to account
+      # Allow AppStream Image Builder & Image actions, scoped to account.
       {
         Effect = "Allow"
         Action = [
           "appstream:CreateImageBuilder",
           "appstream:DeleteImageBuilder",
           "appstream:DescribeImageBuilders",
+          "appstream:StartImageBuilder",
+          "appstream:StopImageBuilder",
           "appstream:DescribeImages",
           "appstream:UpdateImagePermissions",
           "appstream:TagResource"
@@ -40,7 +42,7 @@ resource "aws_iam_policy" "step_function_policy" {
         ]
       },
 
-      # SSM permissions for the RunSSMCommand step
+      # SSM permissions for the RunSSMInstall / GetSSMStatus states
       {
         Effect = "Allow"
         Action = [
@@ -74,6 +76,34 @@ resource "aws_iam_policy" "step_function_policy" {
         Effect   = "Allow"
         Action   = ["ssm:DescribeInstanceInformation"]
         Resource = "*"
+      },
+      # Build lock: conditional PutItem/UpdateItem on this tenant's lock row only.
+      {
+        Effect = "Allow"
+        Action = [
+          "dynamodb:PutItem",
+          "dynamodb:UpdateItem",
+          "dynamodb:GetItem"
+        ]
+        Resource = local.build_lock_table_arn
+      },
+      # Deliberately NOT granted: s3:GetObject on */latest/* — see local.artifact_latest_deny below.
+      # The Step Function must only ever receive pre-resolved SHAs from CI/CD.
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject",
+          "s3:ListBucket"
+        ]
+        Resource = [
+          local.artifact_bucket_arn,
+          "${local.artifact_bucket_arn}/*"
+        ]
+      },
+      {
+        Effect   = "Deny"
+        Action   = ["s3:GetObject"]
+        Resource = local.artifact_latest_deny_resources
       },
       # Allow Step Functions to use the KMS key for CloudWatch Log Group encryption
       {
@@ -165,6 +195,24 @@ resource "aws_iam_policy" "appstream_instance_policy" {
           aws_kms_key.sfn_logs.arn,
           "arn:aws:ssm:${var.aws_region}:${var.account_id}:parameter/${var.project_name}/appstream/*"
         ]
+      },
+      # The Image Builder instance itself downloads pinned platform/tenant script
+      # artifacts at build time — never the latest/ pointer.
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject",
+          "s3:ListBucket"
+        ]
+        Resource = [
+          local.artifact_bucket_arn,
+          "${local.artifact_bucket_arn}/*"
+        ]
+      },
+      {
+        Effect   = "Deny"
+        Action   = ["s3:GetObject"]
+        Resource = local.artifact_latest_deny_resources
       }
     ]
   })
@@ -192,16 +240,154 @@ resource "aws_iam_role_policy_attachment" "appstream_service_access" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonAppStreamServiceAccess"
 }
 
-# SSM Documents for tenant-specific image customization
+# Single SSM document for this tenant's stack.
+# One stack = one tenant = one document, matching the per-tenant isolation
+# for_each that bundled every tenant's document into one shared apply.
 resource "aws_ssm_document" "appstream_setup" {
-  for_each        = var.ssm_document_sources
-  name            = "${var.project_name}-setup-document-${each.key}"
+  name            = "${var.project_name}-setup-document-${var.tenant_key}"
   document_type   = "Command"
   document_format = "JSON"
-  content         = file(each.value)
+  content         = file(var.ssm_document_source)
+}
+
+# ---------------------------------------------------------------------------
+# Shared resources: DynamoDB build-lock table and S3 artifact bucket.
+#
+# These are account-wide, not per-tenant, but Terraform doesn't have a native
+# "create once across many module calls" primitive. create_shared_resources
+# should be true on exactly one tenant stack (conventionally "platform") and
+# false everywhere else — every other stack only reads the ARNs via locals
+# below using data sources, never re-declares the resources.
+# ---------------------------------------------------------------------------
+
+resource "aws_dynamodb_table" "build_locks" {
+  count        = var.create_shared_resources ? 1 : 0
+  name         = var.build_lock_table_name
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "Tenant"
+
+  attribute {
+    name = "Tenant"
+    type = "S"
+  }
+
+  point_in_time_recovery {
+    enabled = true
+  }
+
+  server_side_encryption {
+    enabled     = true
+    kms_key_arn = aws_kms_key.sfn_logs.arn
+  }
+
+  # This table is shared across every tenant stack.
+  # Destroying it would break every tenant's build lock simultaneously, not
+  # just this stack's. Guard against an accidental `terraform destroy` on
+  # the platform stack taking the whole lock mechanism down with it.
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "aws_s3_bucket" "artifacts" {
+  count  = var.create_shared_resources ? 1 : 0
+  bucket = var.artifact_bucket_name
+
+  # Shared across every tenant stack. Same reasoning
+  # as the lock table above — accidental destroy here would delete every
+  # tenant's versioned script history, not just this stack's.
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "artifacts" {
+  count  = var.create_shared_resources ? 1 : 0
+  bucket = aws_s3_bucket.artifacts[0].id
+
+  rule {
+    id     = "expire-old-build-artifacts"
+    status = "Enabled"
+
+    # Versioned S3 prefixes here exist purely to give each concurrent build
+    # an immutable pin for the duration of that build
+    # they are not a long-term audit trail; git already provides
+    # that. A pin only needs to stay stable for the life of one build, so
+    # pruning prefixes well past any plausible build duration keeps the
+    # bucket small without weakening the concurrency guarantee.
+    filter {
+      prefix = ""
+    }
+
+    expiration {
+      days = 30
+    }
+
+    noncurrent_version_expiration {
+      noncurrent_days = 30
+    }
+  }
+}
+
+resource "aws_s3_bucket_versioning" "artifacts" {
+  count  = var.create_shared_resources ? 1 : 0
+  bucket = aws_s3_bucket.artifacts[0].id
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "artifacts" {
+  count  = var.create_shared_resources ? 1 : 0
+  bucket = aws_s3_bucket.artifacts[0].id
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm     = "aws:kms"
+      kms_master_key_id = aws_kms_key.sfn_logs.arn
+    }
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "artifacts" {
+  count                   = var.create_shared_resources ? 1 : 0
+  bucket                  = aws_s3_bucket.artifacts[0].id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+# Tenant stacks that don't own the shared resources look them up by name/ARN
+# instead of re-declaring them, so every stack can reference the same ARNs
+# for IAM policy attachment regardless of which stack created them.
+data "aws_dynamodb_table" "build_locks" {
+  count = var.create_shared_resources ? 0 : 1
+  name  = var.build_lock_table_name
+}
+
+data "aws_s3_bucket" "artifacts" {
+  count  = var.create_shared_resources ? 0 : 1
+  bucket = var.artifact_bucket_name
+}
+
+locals {
+  build_lock_table_arn = var.create_shared_resources ? aws_dynamodb_table.build_locks[0].arn : data.aws_dynamodb_table.build_locks[0].arn
+  artifact_bucket_arn  = var.create_shared_resources ? aws_s3_bucket.artifacts[0].arn : data.aws_s3_bucket.artifacts[0].arn
+
+  # through this module's IAM roles may ever resolve the latest/ pointer.
+  # Only the CI/CD role (managed outside this module) may read it.
+  artifact_latest_deny_resources = [
+    "${local.artifact_bucket_arn}/platform/latest/*",
+    "${local.artifact_bucket_arn}/tenants/*/latest/*"
+  ]
 }
 
 # Step Function State Machine
+# Definition — a pure JSON file, not a
+# templatefile(). Nothing tenant-specific is baked into the definition itself;
+# every value (tenant, platformVersion, tenantVersion, builderName,
+# instanceId, imageName, liveAccountId, preliveAccountId) arrives at
+# StartExecution time, resolved by CI/CD.
 resource "aws_sfn_state_machine" "appstream_automation" {
   name     = "${var.project_name}-state-machine"
   role_arn = aws_iam_role.step_function_role.arn
@@ -211,16 +397,7 @@ resource "aws_sfn_state_machine" "appstream_automation" {
     enabled = true
   }
 
-  definition = templatefile(
-    var.stepfn_definition_file,
-    {
-      AppStreamInstanceRoleArn = aws_iam_role.appstream_instance_role.arn
-      LiveAccountId            = var.live_account_id
-      PreliveAccountId         = var.prelive_account_id
-      # Expose Terraform-managed tenant SSM document names to the state machine template.
-      SsmDocumentNames = { for tenant, doc in aws_ssm_document.appstream_setup : tenant => doc.name }
-    }
-  )
+  definition = file(var.stepfn_definition_file)
 
   logging_configuration {
     include_execution_data = true
