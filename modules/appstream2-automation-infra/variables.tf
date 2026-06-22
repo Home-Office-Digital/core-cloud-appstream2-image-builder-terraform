@@ -66,7 +66,7 @@ variable "tenant_key" {
 }
 
 variable "ssm_document_source" {
-  description = "Path to this tenant's SSM document JSON (for example tenants/apc/ssm/automation.json). One stack manages exactly one tenant's document — see design doc Section 2."
+  description = "Path to this tenant's SSM document JSON (for example tenants/apc/ssm/automation.json). One stack manages exactly one tenant's document"
   type        = string
 
   validation {
@@ -105,7 +105,7 @@ variable "security_group_id" {
 
 variable "stepfn_definition_file" {
   type        = string
-  description = "Path to the Step Functions ASL definition JSON (appstream-build-orchestrator.asl.json — see design doc Section 5)."
+  description = "Path to the Step Functions ASL definition JSON (appstream-build-orchestrator.asl.json)."
 
   validation {
     condition     = length(trimspace(var.stepfn_definition_file)) > 0 && can(regex("\\.json$", var.stepfn_definition_file))
@@ -134,7 +134,7 @@ variable "banner_message" {
 }
 
 variable "artifact_bucket_name" {
-  description = "Name of the existing S3 bucket holding versioned platform/tenant script artifacts (see design doc Section 3). Created once, shared across all tenant stacks — not managed by this module."
+  description = "Name of the existing S3 bucket holding versioned platform/tenant script artifacts. Created once, shared across all tenant stacks — not managed by this module."
   type        = string
 
   validation {
@@ -144,7 +144,7 @@ variable "artifact_bucket_name" {
 }
 
 variable "build_lock_table_name" {
-  description = "Name of the shared DynamoDB build-lock table (see design doc Section 4). Created once, shared across all tenant stacks — not managed by this module."
+  description = "Name of the shared DynamoDB build-lock table. Created once, shared across all tenant stacks — not managed by this module."
   type        = string
   default     = "AppStreamBuildLocks"
 

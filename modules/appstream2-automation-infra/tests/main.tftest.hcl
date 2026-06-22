@@ -94,7 +94,7 @@ run "step_function_role_denies_latest_path_reads" {
       aws_iam_policy.step_function_policy.policy,
       "platform/latest/*"
     )
-    error_message = "Step Function IAM policy must explicitly deny reads to platform/latest/* (design doc Section 3.2/5.1)."
+    error_message = "Step Function IAM policy must explicitly deny reads to platform/latest/*"
   }
 
   assert {
@@ -102,7 +102,7 @@ run "step_function_role_denies_latest_path_reads" {
       aws_iam_policy.step_function_policy.policy,
       "tenants/*/latest/*"
     )
-    error_message = "Step Function IAM policy must explicitly deny reads to tenants/*/latest/* (design doc Section 3.2/5.1)."
+    error_message = "Step Function IAM policy must explicitly deny reads to tenants/*/latest/*"
   }
 }
 
@@ -114,7 +114,7 @@ run "appstream_instance_role_denies_latest_path_reads" {
       aws_iam_policy.appstream_instance_policy.policy,
       "platform/latest/*"
     )
-    error_message = "Image Builder instance IAM policy must explicitly deny reads to platform/latest/* (design doc Section 3.2/5.1)."
+    error_message = "Image Builder instance IAM policy must explicitly deny reads to platform/latest/*"
   }
 }
 
@@ -156,6 +156,6 @@ run "rejects_latest_literal_in_ssm_document_source_path" {
 
   assert {
     condition     = !strcontains(var.ssm_document_source, "/latest/")
-    error_message = "ssm_document_source should never point through a /latest/ path by convention (design doc Section 3.2/5.1)."
+    error_message = "ssm_document_source should never point through a /latest/ path by convention"
   }
 }
