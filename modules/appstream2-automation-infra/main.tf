@@ -326,6 +326,47 @@ resource "aws_s3_bucket_public_access_block" "artifacts_access_logs" {
   restrict_public_buckets = true
 }
 
+resource "aws_s3_bucket_versioning" "artifacts_access_logs" {
+  count  = var.create_shared_resources ? 1 : 0
+  bucket = aws_s3_bucket.artifacts_access_logs[0].id
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "artifacts_access_logs" {
+  count  = var.create_shared_resources ? 1 : 0
+  bucket = aws_s3_bucket.artifacts_access_logs[0].id
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm     = "aws:kms"
+      kms_master_key_id = aws_kms_key.sfn_logs.arn
+    }
+  }
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "artifacts_access_logs" {
+  count  = var.create_shared_resources ? 1 : 0
+  bucket = aws_s3_bucket.artifacts_access_logs[0].id
+
+  rule {
+    id     = "expire-old-access-logs"
+    status = "Enabled"
+
+    filter {
+      prefix = ""
+    }
+
+    expiration {
+      days = 90
+    }
+
+    noncurrent_version_expiration {
+      noncurrent_days = 30
+    }
+  }
+}
+
 # Log bucket needs s3:PutObject granted to the S3 log delivery service
 # principal, scoped to this account, per AWS's standard server access
 # logging setup — without this ACL/policy grant, log delivery silently fails.
@@ -554,6 +595,18 @@ resource "aws_kms_alias" "sfn_logs" {
 }
 
 # IAM Policy for Step Functions logging.
+#
+# Previously built from a data "aws_iam_policy_document" "sfn_logging" block
+# — removed in favour of a direct jsonencode(), matching every other policy
+# in this file, after that exact data source ran into an unresolved upstream
+# bug in terraform-provider-aws (github.com/hashicorp/terraform-provider-aws
+# issue #36700) and terraform core (issue #34764): under `mock_provider
+# "aws" {}` in terraform test, aws_iam_policy_document's computed .json
+# output does not populate correctly even with override_data targeting it
+# explicitly. Since this statement was entirely static (no variable
+# interpolation), a plain jsonencode() removes the dependency on the
+# affected data source entirely rather than working around a bug that has
+# no working workaround.
 #checkov:skip=CKV_AWS_355:CloudWatch Logs delivery APIs used here require wildcard resources.
 resource "aws_iam_policy" "sfn_logging" {
   name = "${var.project_name}-sfn-logging-policy"
