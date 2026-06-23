@@ -94,6 +94,7 @@ variables {
   stepfn_definition_file   = "./tests/fixtures/stepfunction_definition.json"
   artifact_bucket_name     = "appstream-artifacts-979566283533-eu-west-2"
   build_lock_table_name    = "AppStreamBuildLocks"
+  build_lock_table_kms_key_arn = "arn:aws:kms:eu-west-2:979566283533:key/b902403e-f6ad-46c5-a548-29ee27e044db"
   create_shared_resources  = false
 }
 
@@ -215,6 +216,6 @@ run "rejects_latest_literal_in_ssm_document_source_path" {
 
   assert {
     condition     = !strcontains(var.ssm_document_source, "/latest/")
-    error_message = "ssm_document_source should never point through a /latest/ path by convention"
+    error_message = "ssm_document_source should never point through a /latest/ path by convention."
   }
 }

@@ -154,6 +154,17 @@ variable "build_lock_table_name" {
   }
 }
 
+variable "build_lock_table_kms_key_arn" {
+  description = "ARN of the KMS key that encrypts the shared build-lock table, required on every stack where create_shared_resources is false (every tenant except the owner, conventionally 'platform'). Needed because the owning stack's own aws_kms_key.sfn_logs is NOT necessarily the same key that encrypts the lock table for non-owning stacks — this was previously read from the data source's server_side_encryption block directly, but that field is a legacy SDKv2 schema Block, which Terraform's test-framework override_data cannot populate, so it's passed explicitly instead. Ignored entirely when create_shared_resources is true, since that stack reads its own aws_kms_key.sfn_logs.arn directly."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.create_shared_resources || length(trimspace(var.build_lock_table_kms_key_arn)) > 0
+    error_message = "build_lock_table_kms_key_arn must be set on every stack where create_shared_resources is false."
+  }
+}
+
 variable "create_shared_resources" {
   description = "Whether this stack creates the shared, account-wide resources (DynamoDB lock table, S3 artifact bucket). Set true on exactly one tenant stack — conventionally 'platform' — and false everywhere else, so the shared resources aren't duplicated or fought over across tenant stacks."
   type        = bool

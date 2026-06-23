@@ -294,8 +294,6 @@ resource "aws_s3_bucket" "artifacts" {
   }
 }
 
-# Access logging target for the artifact bucket (Checkov: S3 access logging).
-# A separate bucket is required — S3 does not allow a bucket to log to itself.
 resource "aws_s3_bucket" "artifacts_access_logs" {
   count  = var.create_shared_resources ? 1 : 0
   bucket = "${var.artifact_bucket_name}-access-logs"
@@ -355,9 +353,6 @@ resource "aws_s3_bucket_lifecycle_configuration" "artifacts_access_logs" {
   }
 }
 
-# Log bucket needs s3:PutObject granted to the S3 log delivery service
-# principal, scoped to this account, per AWS's standard server access
-# logging setup — without this ACL/policy grant, log delivery silently fails.
 resource "aws_s3_bucket_policy" "artifacts_access_logs" {
   count  = var.create_shared_resources ? 1 : 0
   bucket = aws_s3_bucket.artifacts_access_logs[0].id
@@ -444,9 +439,6 @@ resource "aws_s3_bucket_public_access_block" "artifacts" {
   restrict_public_buckets = true
 }
 
-# Tenant stacks that don't own the shared resources look them up by name/ARN
-# instead of re-declaring them, so every stack can reference the same ARNs
-# for IAM policy attachment regardless of which stack created them.
 data "aws_dynamodb_table" "build_locks" {
   count = var.create_shared_resources ? 0 : 1
   name  = var.build_lock_table_name
@@ -461,7 +453,7 @@ locals {
   build_lock_table_arn = var.create_shared_resources ? aws_dynamodb_table.build_locks[0].arn : data.aws_dynamodb_table.build_locks[0].arn
   artifact_bucket_arn  = var.create_shared_resources ? aws_s3_bucket.artifacts[0].arn : data.aws_s3_bucket.artifacts[0].arn
 
-  build_lock_table_kms_key_arn = var.create_shared_resources ? aws_kms_key.sfn_logs.arn : data.aws_dynamodb_table.build_locks[0].server_side_encryption[0].kms_key_arn
+  build_lock_table_kms_key_arn = var.create_shared_resources ? aws_kms_key.sfn_logs.arn : var.build_lock_table_kms_key_arn
 
   artifact_latest_deny_resources = [
     "${local.artifact_bucket_arn}/platform/latest/*",
