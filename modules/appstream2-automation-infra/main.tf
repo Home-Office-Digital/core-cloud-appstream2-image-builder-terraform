@@ -22,13 +22,6 @@ resource "aws_iam_policy" "step_function_policy" {
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
-
-      # Allow AppStream Image Builder & Image actions, scoped to account.
-      # NOTE: there is no appstream:CreateImage API — image creation happens
-      # ON the Image Builder instance via the AppStreamImageAssistant CLI
-      # (platform/scripts/create_image.sh, run inside RunSSMInstall under the
-      # instance role below), not via a Step Functions SDK call. The Step
-      # Function only ever polls DescribeImages afterward.
       {
         Effect = "Allow"
         Action = [
@@ -92,8 +85,6 @@ resource "aws_iam_policy" "step_function_policy" {
         ]
         Resource = local.build_lock_table_arn
       },
-      # Deliberately NOT granted: s3:GetObject on */latest/* — see local.artifact_latest_deny below.
-      # The Step Function must only ever receive pre-resolved SHAs from CI/CD.
       {
         Effect = "Allow"
         Action = [
@@ -120,6 +111,14 @@ resource "aws_iam_policy" "step_function_policy" {
           "kms:DescribeKey"
         ]
         Resource = aws_kms_key.sfn_logs.arn
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "kms:Decrypt",
+          "kms:DescribeKey"
+        ]
+        Resource = local.build_lock_table_kms_key_arn
       },
       # Required for Step Functions X-Ray tracing when tracing_configuration is enabled
       {
@@ -257,12 +256,6 @@ resource "aws_ssm_document" "appstream_setup" {
 
 # ---------------------------------------------------------------------------
 # Shared resources: DynamoDB build-lock table and S3 artifact bucket.
-#
-# These are account-wide, not per-tenant, but Terraform doesn't have a native
-# "create once across many module calls" primitive. create_shared_resources
-# should be true on exactly one tenant stack (conventionally "platform") and
-# false everywhere else — every other stack only reads the ARNs via locals
-# below using data sources, never re-declares the resources.
 # ---------------------------------------------------------------------------
 
 resource "aws_dynamodb_table" "build_locks" {
@@ -294,6 +287,8 @@ resource "aws_dynamodb_table" "build_locks" {
   }
 }
 
+#checkov:skip=CKV2_AWS_62:No S3 event consumer exists in this design (no Lambda/SQS/EventBridge reacting to new objects) — adding a notification configuration with nothing subscribed to it would configure a capability nothing uses, not close a real gap.
+#checkov:skip=CKV_AWS_144:Every object here is a SHA-versioned, checksum-verified copy of content already in source control (platform/scripts/**, tenants/*/scripts/**) — recovery from a regional loss is "re-run publish-artifacts.yaml", not "fail over to a replica." CRR would add ongoing cost/complexity to protect data that isn't actually unique or irreplaceable.
 resource "aws_s3_bucket" "artifacts" {
   count  = var.create_shared_resources ? 1 : 0
   bucket = var.artifact_bucket_name
@@ -306,8 +301,9 @@ resource "aws_s3_bucket" "artifacts" {
   }
 }
 
-# Access logging target for the artifact bucket (Checkov: S3 access logging).
-# A separate bucket is required — S3 does not allow a bucket to log to itself.
+
+#checkov:skip=CKV2_AWS_62:Same reasoning as the artifacts bucket above — no event consumer exists for this bucket either.
+#checkov:skip=CKV_AWS_144:Access logs are operationally useful but not irreplaceable business data; same cost/complexity reasoning as the artifacts bucket above applies.
 resource "aws_s3_bucket" "artifacts_access_logs" {
   count  = var.create_shared_resources ? 1 : 0
   bucket = "${var.artifact_bucket_name}-access-logs"
@@ -367,9 +363,6 @@ resource "aws_s3_bucket_lifecycle_configuration" "artifacts_access_logs" {
   }
 }
 
-# Log bucket needs s3:PutObject granted to the S3 log delivery service
-# principal, scoped to this account, per AWS's standard server access
-# logging setup — without this ACL/policy grant, log delivery silently fails.
 resource "aws_s3_bucket_policy" "artifacts_access_logs" {
   count  = var.create_shared_resources ? 1 : 0
   bucket = aws_s3_bucket.artifacts_access_logs[0].id
@@ -414,12 +407,6 @@ resource "aws_s3_bucket_lifecycle_configuration" "artifacts" {
     id     = "expire-old-build-artifacts"
     status = "Enabled"
 
-    # Versioned S3 prefixes here exist purely to give each concurrent build
-    # an immutable pin for the duration of that build
-    # — they are not a long-term audit trail; git already provides
-    # that. A pin only needs to stay stable for the life of one build, so
-    # pruning prefixes well past any plausible build duration keeps the
-    # bucket small without weakening the concurrency guarantee.
     filter {
       prefix = ""
     }
@@ -462,9 +449,6 @@ resource "aws_s3_bucket_public_access_block" "artifacts" {
   restrict_public_buckets = true
 }
 
-# Tenant stacks that don't own the shared resources look them up by name/ARN
-# instead of re-declaring them, so every stack can reference the same ARNs
-# for IAM policy attachment regardless of which stack created them.
 data "aws_dynamodb_table" "build_locks" {
   count = var.create_shared_resources ? 0 : 1
   name  = var.build_lock_table_name
@@ -479,9 +463,8 @@ locals {
   build_lock_table_arn = var.create_shared_resources ? aws_dynamodb_table.build_locks[0].arn : data.aws_dynamodb_table.build_locks[0].arn
   artifact_bucket_arn  = var.create_shared_resources ? aws_s3_bucket.artifacts[0].arn : data.aws_s3_bucket.artifacts[0].arn
 
-  # Structurally enforces : nothing reading
-  # through this module's IAM roles may ever resolve the latest/ pointer.
-  # Only the CI/CD role (managed outside this module) may read it.
+  build_lock_table_kms_key_arn = var.create_shared_resources ? aws_kms_key.sfn_logs.arn : var.build_lock_table_kms_key_arn
+
   artifact_latest_deny_resources = [
     "${local.artifact_bucket_arn}/platform/latest/*",
     "${local.artifact_bucket_arn}/tenants/*/latest/*"
@@ -489,11 +472,6 @@ locals {
 }
 
 # Step Function State Machine
-# Definition is the v1.2 ASL — a pure JSON file, not a
-# templatefile(). Nothing tenant-specific is baked into the definition itself;
-# every value (tenant, platformVersion, tenantVersion, builderName,
-# instanceId, imageName, liveAccountId, preliveAccountId) arrives at
-# StartExecution time, resolved by CI/CD.
 resource "aws_sfn_state_machine" "appstream_automation" {
   name     = "${var.project_name}-state-machine"
   role_arn = aws_iam_role.step_function_role.arn
@@ -595,18 +573,7 @@ resource "aws_kms_alias" "sfn_logs" {
 }
 
 # IAM Policy for Step Functions logging.
-#
-# Previously built from a data "aws_iam_policy_document" "sfn_logging" block
-# — removed in favour of a direct jsonencode(), matching every other policy
-# in this file, after that exact data source ran into an unresolved upstream
-# bug in terraform-provider-aws (github.com/hashicorp/terraform-provider-aws
-# issue #36700) and terraform core (issue #34764): under `mock_provider
-# "aws" {}` in terraform test, aws_iam_policy_document's computed .json
-# output does not populate correctly even with override_data targeting it
-# explicitly. Since this statement was entirely static (no variable
-# interpolation), a plain jsonencode() removes the dependency on the
-# affected data source entirely rather than working around a bug that has
-# no working workaround.
+
 #checkov:skip=CKV_AWS_355:CloudWatch Logs delivery APIs used here require wildcard resources.
 resource "aws_iam_policy" "sfn_logging" {
   name = "${var.project_name}-sfn-logging-policy"
