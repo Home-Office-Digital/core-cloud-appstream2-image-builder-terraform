@@ -22,7 +22,6 @@ resource "aws_iam_policy" "step_function_policy" {
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
-
       {
         Effect = "Allow"
         Action = [
@@ -201,6 +200,8 @@ resource "aws_iam_policy" "appstream_instance_policy" {
           "arn:aws:ssm:${var.aws_region}:${var.account_id}:parameter/${var.project_name}/appstream/*"
         ]
       },
+      # The Image Builder instance itself downloads pinned platform/tenant script
+      # artifacts at build time — never the latest/ pointer.
       {
         Effect = "Allow"
         Action = [
@@ -253,6 +254,10 @@ resource "aws_ssm_document" "appstream_setup" {
   content         = file(var.ssm_document_source)
 }
 
+# ---------------------------------------------------------------------------
+# Shared resources: DynamoDB build-lock table and S3 artifact bucket.
+# ---------------------------------------------------------------------------
+
 resource "aws_dynamodb_table" "build_locks" {
   count        = var.create_shared_resources ? 1 : 0
   name         = var.build_lock_table_name
@@ -282,6 +287,8 @@ resource "aws_dynamodb_table" "build_locks" {
   }
 }
 
+#checkov:skip=CKV2_AWS_62:No S3 event consumer exists in this design (no Lambda/SQS/EventBridge reacting to new objects) — adding a notification configuration with nothing subscribed to it would configure a capability nothing uses, not close a real gap.
+#checkov:skip=CKV_AWS_144:Every object here is a SHA-versioned, checksum-verified copy of content already in source control (platform/scripts/**, tenants/*/scripts/**) — recovery from a regional loss is "re-run publish-artifacts.yaml", not "fail over to a replica." CRR would add ongoing cost/complexity to protect data that isn't actually unique or irreplaceable.
 resource "aws_s3_bucket" "artifacts" {
   count  = var.create_shared_resources ? 1 : 0
   bucket = var.artifact_bucket_name
@@ -294,6 +301,9 @@ resource "aws_s3_bucket" "artifacts" {
   }
 }
 
+
+#checkov:skip=CKV2_AWS_62:Same reasoning as the artifacts bucket above — no event consumer exists for this bucket either.
+#checkov:skip=CKV_AWS_144:Access logs are operationally useful but not irreplaceable business data; same cost/complexity reasoning as the artifacts bucket above applies.
 resource "aws_s3_bucket" "artifacts_access_logs" {
   count  = var.create_shared_resources ? 1 : 0
   bucket = "${var.artifact_bucket_name}-access-logs"
