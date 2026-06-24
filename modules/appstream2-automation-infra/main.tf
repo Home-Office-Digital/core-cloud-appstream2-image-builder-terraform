@@ -192,6 +192,7 @@ resource "aws_iam_policy" "appstream_instance_policy" {
         Effect = "Allow"
         Action = [
           "kms:Decrypt",
+          "kms:GenerateDataKey*",
           "kms:DescribeKey",
           "ssm:GetParameter"
         ]
@@ -201,7 +202,7 @@ resource "aws_iam_policy" "appstream_instance_policy" {
         ]
       },
       # The Image Builder instance itself downloads pinned platform/tenant script
-      # artifacts at build time — never the latest/ pointer.
+      # artifacts at build time -- never the latest/ pointer.
       {
         Effect = "Allow"
         Action = [
@@ -211,6 +212,15 @@ resource "aws_iam_policy" "appstream_instance_policy" {
         Resource = [
           local.artifact_bucket_arn,
           "${local.artifact_bucket_arn}/*"
+        ]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:PutObject"
+        ]
+        Resource = [
+          "${local.artifact_bucket_arn}/jobs/*"
         ]
       },
       {
@@ -254,10 +264,6 @@ resource "aws_ssm_document" "appstream_setup" {
   content         = file(var.ssm_document_source)
 }
 
-# ---------------------------------------------------------------------------
-# Shared resources: DynamoDB build-lock table and S3 artifact bucket.
-# ---------------------------------------------------------------------------
-
 resource "aws_dynamodb_table" "build_locks" {
   count        = var.create_shared_resources ? 1 : 0
   name         = var.build_lock_table_name
@@ -300,7 +306,6 @@ resource "aws_s3_bucket" "artifacts" {
     prevent_destroy = true
   }
 }
-
 
 #checkov:skip=CKV2_AWS_62:Same reasoning as the artifacts bucket above — no event consumer exists for this bucket either.
 #checkov:skip=CKV_AWS_144:Access logs are operationally useful but not irreplaceable business data; same cost/complexity reasoning as the artifacts bucket above applies.
