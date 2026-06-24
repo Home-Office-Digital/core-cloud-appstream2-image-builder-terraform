@@ -192,6 +192,7 @@ resource "aws_iam_policy" "appstream_instance_policy" {
         Effect = "Allow"
         Action = [
           "kms:Decrypt",
+          "kms:GenerateDataKey*",
           "kms:DescribeKey",
           "ssm:GetParameter"
         ]
@@ -253,10 +254,6 @@ resource "aws_ssm_document" "appstream_setup" {
   document_format = "JSON"
   content         = file(var.ssm_document_source)
 }
-
-# ---------------------------------------------------------------------------
-# Shared resources: DynamoDB build-lock table and S3 artifact bucket.
-# ---------------------------------------------------------------------------
 
 resource "aws_dynamodb_table" "build_locks" {
   count        = var.create_shared_resources ? 1 : 0
