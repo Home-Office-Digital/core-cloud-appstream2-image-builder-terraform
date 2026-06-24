@@ -202,7 +202,7 @@ resource "aws_iam_policy" "appstream_instance_policy" {
         ]
       },
       # The Image Builder instance itself downloads pinned platform/tenant script
-      # artifacts at build time — never the latest/ pointer.
+      # artifacts at build time -- never the latest/ pointer.
       {
         Effect = "Allow"
         Action = [
@@ -212,6 +212,15 @@ resource "aws_iam_policy" "appstream_instance_policy" {
         Resource = [
           local.artifact_bucket_arn,
           "${local.artifact_bucket_arn}/*"
+        ]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:PutObject"
+        ]
+        Resource = [
+          "${local.artifact_bucket_arn}/jobs/*"
         ]
       },
       {
@@ -297,7 +306,6 @@ resource "aws_s3_bucket" "artifacts" {
     prevent_destroy = true
   }
 }
-
 
 #checkov:skip=CKV2_AWS_62:Same reasoning as the artifacts bucket above — no event consumer exists for this bucket either.
 #checkov:skip=CKV_AWS_144:Access logs are operationally useful but not irreplaceable business data; same cost/complexity reasoning as the artifacts bucket above applies.
