@@ -92,6 +92,17 @@ resource "aws_iam_policy" "step_function_policy" {
         ]
         Resource = local.build_lock_table_arn
       },
+      # v1.6 stale-BUILDING lock takeover: after AcquireLock fails, the state
+      # machine reads the lock row (GetItem) and calls DescribeExecution on
+      # the stored ExecutionArn before TakeoverAcquireLock. Scoped to this
+      # state machine's executions only.
+      {
+        Effect = "Allow"
+        Action = [
+          "states:DescribeExecution"
+        ]
+        Resource = "arn:aws:states:${var.aws_region}:${var.account_id}:execution:${var.project_name}-state-machine:*"
+      },
       # Deliberately NOT granted: s3:GetObject on */latest/* — see local.artifact_latest_deny below.
       # The Step Function must only ever receive pre-resolved SHAs from CI/CD.
       {
@@ -146,26 +157,6 @@ resource "aws_iam_policy" "step_function_policy" {
           "kms:DescribeKey"
         ]
         Resource = aws_kms_key.sfn_logs.arn
-      },
-      # FIXED: the grant above only covers THIS stack's own sfn_logs key --
-      # correct for platform's own CloudWatch logs, but NOT the same key
-      # that encrypts the shared artifact bucket for any non-owning tenant
-      # (confirmed via a real AccessDeniedException on apc's step function
-      # role: kms:GenerateDataKey denied when WriteJobFile/ClearStaleResult
-      # tried to write to the KMS-encrypted artifact bucket). Reusing
-      # local.build_lock_table_kms_key_arn here is deliberate -- it already
-      # correctly resolves to "whichever key platform actually owns" via
-      # the same owner/non-owner pattern fixed earlier for the lock table,
-      # and that happens to be the exact same key that encrypts the
-      # artifact bucket too (both owned by platform's stack).
-      {
-        Effect = "Allow"
-        Action = [
-          "kms:GenerateDataKey*",
-          "kms:Decrypt",
-          "kms:DescribeKey"
-        ]
-        Resource = local.build_lock_table_kms_key_arn
       },
       # FIXED: separate grant for the build-lock table's actual encryption
       # key, which is NOT the same as this stack's own sfn_logs key for any
@@ -262,22 +253,6 @@ resource "aws_iam_policy" "appstream_instance_policy" {
           aws_kms_key.sfn_logs.arn,
           "arn:aws:ssm:${var.aws_region}:${var.account_id}:parameter/${var.project_name}/appstream/*"
         ]
-      },
-      # FIXED: same cross-tenant KMS key gap as the Step Function role's
-      # statement above -- aws_kms_key.sfn_logs.arn is THIS stack's own
-      # key, not necessarily the artifact bucket's actual encryption key
-      # for any non-owning tenant. The poller (writing result.json/
-      # result.log to the artifact bucket) would hit the identical
-      # AccessDeniedException the Step Function role just hit, the moment
-      # it actually tried to write, on any stack other than platform.
-      {
-        Effect = "Allow"
-        Action = [
-          "kms:GenerateDataKey*",
-          "kms:Decrypt",
-          "kms:DescribeKey"
-        ]
-        Resource = local.build_lock_table_kms_key_arn
       },
       # The Image Builder instance itself downloads pinned platform/tenant script
       # artifacts at build time -- never the latest/ pointer.
@@ -612,7 +587,7 @@ locals {
 }
 
 # Step Function State Machine
-# Definition is the v1.5 ASL -- a pure JSON file, not a
+# Definition is the v1.6 ASL -- a pure JSON file, not a
 # templatefile(). Nothing tenant-specific is baked into the definition itself;
 # every value (tenant, platformVersion, tenantVersion, builderName,
 # startedAtEpoch, imageName, liveAccountId, preliveAccountId) arrives at

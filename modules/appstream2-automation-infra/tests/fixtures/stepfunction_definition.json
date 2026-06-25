@@ -1,20 +1,45 @@
 {
-  "Comment": "Multi-Tenant AppStream Image Factory - v1.2 (imageName resolved upstream by CI/CD, never derived in-state)",
-  "StartAt": "AcquireLock",
+  "Comment": "Multi-Tenant AppStream Image Factory - v1.6 (v1.5 poller/S3 job flow plus stale-BUILDING lock takeover). LOCK ACQUISITION (four paths, first match wins in AcquireLock; fifth path via takeover sub-flow): (1) no row, (2) COMPLETE, (3) FAILED, (4) BUILDING but LeaseExpiry expired, (5) BUILDING, lease still valid, but stored ExecutionArn verified terminal via DescribeExecution -- TakeoverAcquireLock with condition #s=BUILDING AND ExecutionArn=:staleExecArn only). Detection (GetItem/DescribeExecution) is read-only; takeover is a separate conditional PutItem so two builds cannot start at once. TIMING ORDERING unchanged: poller 50 min < lease 60 min < TimeoutSeconds 90 min. TimeoutSeconds bypasses Catch blocks and does not release the lock; LeaseExpiry remains the time-based backstop when DescribeExecution is unavailable.",
+  "TimeoutSeconds": 5400,
+  "StartAt": "ValidateStartedAtEpoch",
   "States": {
-
+    "ValidateStartedAtEpoch": {
+      "Comment": "FIXED: nothing in this state machine SETS startedAtEpoch -- it must arrive in the StartExecution input (build.yaml's 'Start Step Function Execution' step computes it via `date -u +%s` and includes it in the payload). If it's ever missing -- a bypassed build.yaml, a manual console/CLI StartExecution, a future refactor that drops the field -- AcquireLock would previously fail with a generic, hard-to-diagnose States.Runtime error. This state checks for it explicitly first and fails with a clear, named error instead.",
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.startedAtEpoch",
+          "IsPresent": true,
+          "Next": "AcquireLock"
+        }
+      ],
+      "Default": "MissingStartedAtEpoch"
+    },
+    "MissingStartedAtEpoch": {
+      "Type": "Fail",
+      "Error": "MissingRequiredInput",
+      "Cause": "startedAtEpoch was not present in the StartExecution input. This field must be set by the caller (build.yaml computes it via `date -u +%s`) -- it is never derived inside the state machine itself."
+    },
     "AcquireLock": {
       "Type": "Task",
       "Resource": "arn:aws:states:::aws-sdk:dynamodb:putItem",
       "Parameters": {
         "TableName": "AppStreamBuildLocks",
         "Item": {
-          "Tenant": { "S.$": "$.tenant" },
-          "Status": { "S": "BUILDING" },
-          "ExecutionArn": { "S.$": "$$.Execution.Id" },
-          "StartedAt": { "N.$": "$$.State.EnteredTimeEpoch" },
+          "Tenant": {
+            "S.$": "$.tenant"
+          },
+          "Status": {
+            "S": "BUILDING"
+          },
+          "ExecutionArn": {
+            "S.$": "$$.Execution.Id"
+          },
+          "StartedAt": {
+            "N.$": "States.Format('{}', $.startedAtEpoch)"
+          },
           "LeaseExpiry": {
-            "N.$": "States.MathAdd($$.State.EnteredTimeEpoch, 3600)"
+            "N.$": "States.Format('{}', States.MathAdd($.startedAtEpoch, 3600))"
           }
         },
         "ConditionExpression": "attribute_not_exists(Tenant) OR #s = :complete OR #s = :failed OR LeaseExpiry < :now",
@@ -22,30 +47,229 @@
           "#s": "Status"
         },
         "ExpressionAttributeValues": {
-          ":complete": { "S": "COMPLETE" },
-          ":failed": { "S": "FAILED" },
-          ":now": { "N.$": "$$.State.EnteredTimeEpoch" }
+          ":complete": {
+            "S": "COMPLETE"
+          },
+          ":failed": {
+            "S": "FAILED"
+          },
+          ":now": {
+            "N.$": "States.Format('{}', $.startedAtEpoch)"
+          }
         }
       },
+      "ResultPath": "$.lockResult",
       "Catch": [
         {
-          "ErrorEquals": ["DynamoDB.ConditionalCheckFailedException"],
-          "Next": "LockFailed"
+          "ErrorEquals": [
+            "DynamoDB.ConditionalCheckFailedException"
+          ],
+          "Next": "GetLockItem",
+          "ResultPath": "$.error"
         },
         {
-          "ErrorEquals": ["States.ALL"],
-          "Next": "Fail"
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "Fail",
+          "ResultPath": "$.error"
         }
       ],
       "Next": "DescribeBuilder"
     },
-
+    "GetLockItem": {
+      "Comment": "AcquireLock failed with ConditionalCheckFailedException -- the row exists and the fast-path rules (empty/COMPLETE/FAILED/lease-expired) did not apply. Read the lock to decide whether this is a genuinely live BUILDING holder or a stale BUILDING lock whose Step Function execution has already terminated.",
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:dynamodb:getItem",
+      "Parameters": {
+        "TableName": "AppStreamBuildLocks",
+        "Key": {
+          "Tenant": {
+            "S.$": "$.tenant"
+          }
+        }
+      },
+      "ResultPath": "$.lockItem",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "LockFailed",
+          "ResultPath": "$.error"
+        }
+      ],
+      "Next": "IsLockItemPresent"
+    },
+    "IsLockItemPresent": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.lockItem.Item",
+          "IsPresent": true,
+          "Next": "ParseLockFields"
+        }
+      ],
+      "Default": "LockFailed"
+    },
+    "ParseLockFields": {
+      "Comment": "Flatten DynamoDB typed attributes for Choice comparisons. lockLeaseExpiry is parsed to a number so NumericGreaterThanEqualsPath can compare it against startedAtEpoch.",
+      "Type": "Pass",
+      "Parameters": {
+        "tenant.$": "$.tenant",
+        "startedAtEpoch.$": "$.startedAtEpoch",
+        "artifactBucket.$": "$.artifactBucket",
+        "platformVersion.$": "$.platformVersion",
+        "tenantVersion.$": "$.tenantVersion",
+        "builderName.$": "$.builderName",
+        "imageName.$": "$.imageName",
+        "bannerMessageParameter.$": "$.bannerMessageParameter",
+        "liveAccountId.$": "$.liveAccountId",
+        "preliveAccountId.$": "$.preliveAccountId",
+        "baseImageName.$": "$.baseImageName",
+        "instanceType.$": "$.instanceType",
+        "appstreamInstanceRoleArn.$": "$.appstreamInstanceRoleArn",
+        "subnetId.$": "$.subnetId",
+        "securityGroupId.$": "$.securityGroupId",
+        "lockStatus.$": "$.lockItem.Item.Status.S",
+        "lockExecutionArn.$": "$.lockItem.Item.ExecutionArn.S",
+        "lockLeaseExpiry.$": "States.StringToJson($.lockItem.Item.LeaseExpiry.N)"
+      },
+      "Next": "IsStaleBuildingLock"
+    },
+    "IsStaleBuildingLock": {
+      "Comment": "Only enter the takeover sub-flow when Status is BUILDING AND the lease has NOT yet expired (LeaseExpiry >= startedAtEpoch). If the lease already expired, AcquireLock should have succeeded on the fast path -- reaching here with a non-BUILDING status or an expired lease means genuinely busy or a race; fail closed.",
+      "Type": "Choice",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.lockStatus",
+              "StringEquals": "BUILDING"
+            },
+            {
+              "Variable": "$.lockLeaseExpiry",
+              "NumericGreaterThanEqualsPath": "$.startedAtEpoch"
+            }
+          ],
+          "Next": "DescribeStaleExecution"
+        }
+      ],
+      "Default": "LockFailed"
+    },
+    "DescribeStaleExecution": {
+      "Comment": "Read-only detection: is the execution named in the lock row still RUNNING? Terminal statuses (FAILED/TIMED_OUT/ABORTED/SUCCEEDED) mean the BUILDING flag is lying and takeover may proceed. If DescribeExecution returns Sfn.ExecutionDoesNotExistException (orphaned lock row), takeover proceeds -- that is the ONLY verified ErrorEquals name for aws-sdk:sfn:describeExecution; AWS SDK integration errors are ServicePrefix.ApiErrorName with Exception suffix (resource aws-sdk:sfn -> Sfn; API error ExecutionDoesNotExist -> ExecutionDoesNotExistException). Unknown ErrorEquals strings do not fail ASL schema validation at deploy; they simply never match at runtime.",
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:sfn:describeExecution",
+      "Parameters": {
+        "ExecutionArn.$": "$.lockExecutionArn"
+      },
+      "ResultPath": "$.staleExecution",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "Sfn.ExecutionDoesNotExistException"
+          ],
+          "Next": "TakeoverAcquireLock",
+          "ResultPath": "$.error"
+        },
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "LockFailed",
+          "ResultPath": "$.error"
+        }
+      ],
+      "Next": "IsExecutionTerminal"
+    },
+    "IsExecutionTerminal": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Or": [
+            {
+              "Variable": "$.staleExecution.status",
+              "StringEquals": "FAILED"
+            },
+            {
+              "Variable": "$.staleExecution.status",
+              "StringEquals": "TIMED_OUT"
+            },
+            {
+              "Variable": "$.staleExecution.status",
+              "StringEquals": "ABORTED"
+            },
+            {
+              "Variable": "$.staleExecution.status",
+              "StringEquals": "SUCCEEDED"
+            }
+          ],
+          "Next": "TakeoverAcquireLock"
+        }
+      ],
+      "Default": "LockFailed"
+    },
+    "TakeoverAcquireLock": {
+      "Comment": "Atomic takeover: replace a stale BUILDING lock ONLY if Status is still BUILDING AND ExecutionArn is still the one we verified (or could not find). Two concurrent recoverers racing here: only one PutItem succeeds; the other gets ConditionalCheckFailedException and fails closed. Does NOT apply when the old execution is still RUNNING.",
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:dynamodb:putItem",
+      "Parameters": {
+        "TableName": "AppStreamBuildLocks",
+        "Item": {
+          "Tenant": {
+            "S.$": "$.tenant"
+          },
+          "Status": {
+            "S": "BUILDING"
+          },
+          "ExecutionArn": {
+            "S.$": "$$.Execution.Id"
+          },
+          "StartedAt": {
+            "N.$": "States.Format('{}', $.startedAtEpoch)"
+          },
+          "LeaseExpiry": {
+            "N.$": "States.Format('{}', States.MathAdd($.startedAtEpoch, 3600))"
+          }
+        },
+        "ConditionExpression": "#s = :building AND ExecutionArn = :staleExecArn",
+        "ExpressionAttributeNames": {
+          "#s": "Status"
+        },
+        "ExpressionAttributeValues": {
+          ":building": {
+            "S": "BUILDING"
+          },
+          ":staleExecArn": {
+            "S.$": "$.lockExecutionArn"
+          }
+        }
+      },
+      "ResultPath": "$.lockResult",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "DynamoDB.ConditionalCheckFailedException"
+          ],
+          "Next": "LockFailed",
+          "ResultPath": "$.error"
+        },
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "Fail",
+          "ResultPath": "$.error"
+        }
+      ],
+      "Next": "DescribeBuilder"
+    },
     "LockFailed": {
       "Type": "Fail",
       "Error": "TenantBusy",
-      "Cause": "Another build is currently running or lease is still active"
+      "Cause": "Another build holds the lock and is still active, or a stale-lock takeover was attempted but lost the conditional race"
     },
-
     "DescribeBuilder": {
       "Type": "Task",
       "Resource": "arn:aws:states:::aws-sdk:appstream:describeImageBuilders",
@@ -54,11 +278,23 @@
       },
       "ResultPath": "$.builder",
       "Catch": [
-        { "ErrorEquals": ["States.ALL"], "Next": "ReleaseLockFail" }
+        {
+          "ErrorEquals": [
+            "AppStream.ResourceNotFoundException"
+          ],
+          "Next": "CreateBuilder",
+          "ResultPath": "$.error"
+        },
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "ReleaseLockFail",
+          "ResultPath": "$.error"
+        }
       ],
       "Next": "BuilderExists"
     },
-
     "BuilderExists": {
       "Type": "Choice",
       "Choices": [
@@ -70,7 +306,6 @@
       ],
       "Default": "CreateBuilder"
     },
-
     "CreateBuilder": {
       "Type": "Task",
       "Resource": "arn:aws:states:::aws-sdk:appstream:createImageBuilder",
@@ -86,23 +321,28 @@
       },
       "ResultPath": "$.createResult",
       "Catch": [
-        { "ErrorEquals": ["States.ALL"], "Next": "ReleaseLockFail" }
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "ReleaseLockFail",
+          "ResultPath": "$.error"
+        }
       ],
       "Next": "WaitForBuilder"
     },
-
     "IsBuilderRunning": {
+      "Comment": "FIXED: now goes straight to BuildJobPayload instead of GetInstance. The old GetInstance/IsInstanceReady/WaitForInstance loop (ec2:describeInstances by ENI) was a dead end for the poller-based design -- it can never succeed for a freshly-created AppStream Image Builder, since that instance lives in an AWS-internal account, invisible to ec2:describeInstances in this account (confirmed via direct investigation: InstanceOwnerId on the ENI belonged to a different account entirely). The old loop only ever 'succeeded' during manual testing because it reused an already-running builder where the loop had nothing real to resolve against anyway. The poller mechanism never needed an instanceId in the first place -- it only needs builderName, which it already has from $.builderName, and discovers its own identity on the instance side via AppStream_Resource_Name.",
       "Type": "Choice",
       "Choices": [
         {
           "Variable": "$.builder.ImageBuilders[0].State",
           "StringEquals": "RUNNING",
-          "Next": "GetInstance"
+          "Next": "BuildJobPayload"
         }
       ],
       "Default": "StartBuilder"
     },
-
     "StartBuilder": {
       "Type": "Task",
       "Resource": "arn:aws:states:::aws-sdk:appstream:startImageBuilder",
@@ -111,17 +351,21 @@
       },
       "ResultPath": "$.startResult",
       "Catch": [
-        { "ErrorEquals": ["States.ALL"], "Next": "ReleaseLockFail" }
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "ReleaseLockFail",
+          "ResultPath": "$.error"
+        }
       ],
       "Next": "WaitForBuilder"
     },
-
     "WaitForBuilder": {
       "Type": "Wait",
       "Seconds": 60,
       "Next": "RefreshBuilder"
     },
-
     "RefreshBuilder": {
       "Type": "Task",
       "Resource": "arn:aws:states:::aws-sdk:appstream:describeImageBuilders",
@@ -130,112 +374,160 @@
       },
       "ResultPath": "$.builder",
       "Catch": [
-        { "ErrorEquals": ["States.ALL"], "Next": "ReleaseLockFail" }
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "ReleaseLockFail",
+          "ResultPath": "$.error"
+        }
       ],
       "Next": "IsBuilderRunning"
     },
-
-    "GetInstance": {
-      "Type": "Task",
-      "Resource": "arn:aws:states:::aws-sdk:ec2:describeInstances",
-      "Parameters": {
-        "Filters": [
-          {
-            "Name": "network-interface.network-interface-id",
-            "Values.$": "States.Array($.builder.ImageBuilders[0].NetworkAccessConfiguration.EniId)"
-          }
-        ]
-      },
-      "ResultPath": "$.instance",
-      "Catch": [
-        { "ErrorEquals": ["States.ALL"], "Next": "ReleaseLockFail" }
-      ],
-      "Next": "SetInstanceId"
-    },
-
-    "SetInstanceId": {
+    "BuildJobPayload": {
+      "Comment": "RENAMED from SetInstanceId -- this state no longer sets an instance ID at all (that concept doesn't apply to the poller-based design); it builds jobPayload, the exact JSON object ccpam-build-poller.sh expects to find at jobs/<builderName>/job.json (jobId, artifactBucket, platformVersion, tenantVersion, tenant, finalImageName, bannerMessageParameter -- confirmed field-for-field against the poller script's own job['...'] reads). jobId is set to the execution ARN so the poller's idempotency check and this state machine's own IsJobComplete check unambiguously agree on which attempt's result they're looking at, even if a builder is reused across retries.",
       "Type": "Pass",
       "Parameters": {
         "tenant.$": "$.tenant",
-        "documentName.$": "$.documentName",
         "artifactBucket.$": "$.artifactBucket",
         "platformVersion.$": "$.platformVersion",
         "tenantVersion.$": "$.tenantVersion",
         "builderName.$": "$.builderName",
-        "instanceId.$": "$.instance.Reservations[0].Instances[0].InstanceId",
         "imageName.$": "$.imageName",
         "bannerMessageParameter.$": "$.bannerMessageParameter",
         "liveAccountId.$": "$.liveAccountId",
-        "preliveAccountId.$": "$.preliveAccountId"
-      },
-      "Next": "RunSSMInstall"
-    },
-
-    "RunSSMInstall": {
-      "Type": "Task",
-      "Resource": "arn:aws:states:::aws-sdk:ssm:sendCommand",
-      "Parameters": {
-        "DocumentName.$": "$.documentName",
-        "InstanceIds.$": "States.Array($.instanceId)",
-        "Parameters": {
-          "ArtifactBucket.$": "States.Array($.artifactBucket)",
-          "PlatformVersion.$": "States.Array($.platformVersion)",
-          "TenantName.$": "States.Array($.tenant)",
-          "TenantVersion.$": "States.Array($.tenantVersion)",
-          "FinalImageName.$": "States.Array($.imageName)",
-          "BannerMessageParameter.$": "States.Array($.bannerMessageParameter)"
+        "preliveAccountId.$": "$.preliveAccountId",
+        "jobPayload": {
+          "jobId.$": "$$.Execution.Id",
+          "artifactBucket.$": "$.artifactBucket",
+          "platformVersion.$": "$.platformVersion",
+          "tenantVersion.$": "$.tenantVersion",
+          "tenant.$": "$.tenant",
+          "finalImageName.$": "$.imageName",
+          "bannerMessageParameter.$": "$.bannerMessageParameter"
         }
       },
-      "ResultPath": "$.ssm",
-      "Catch": [
-        { "ErrorEquals": ["States.ALL"], "Next": "ReleaseLockFail" }
-      ],
-      "Next": "WaitForSSM"
+      "Next": "ClearStaleResult"
     },
-
-    "WaitForSSM": {
+    "ClearStaleResult": {
+      "Comment": "FIXED: closes a real race confirmed in review. Without this, a prior execution's stale result.json (e.g. a 'no_job_received' sentinel left behind after a previous attempt's poller gave up waiting, or any other leftover result from an earlier attempt against this same builder) would still be sitting at this key when THIS execution's GetJobResult polls -- which can happen within seconds of WriteJobFile, long before the poller has even started polling for the new job.json, let alone reached its own stale-result-cleanup check (which only runs AFTER it finds a job file -- too late for this race). IsJobComplete would then hit the stale result's status branch immediately and route incorrectly (e.g. straight to ReleaseLockFail off a leftover no_job_received sentinel) before the new build has even begun. Deleting here, before WriteJobFile, closes the window completely: s3:deleteObject on a nonexistent key returns 204 (success), confirmed against AWS's own API documentation, so this is always safe to call even on a builder's very first-ever build with no result.json yet.",
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:s3:deleteObject",
+      "Parameters": {
+        "Bucket.$": "$.artifactBucket",
+        "Key.$": "States.Format('jobs/{}/result.json', $.builderName)"
+      },
+      "ResultPath": "$.clearStaleResultResult",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "ReleaseLockFail",
+          "ResultPath": "$.error"
+        }
+      ],
+      "Next": "WriteJobFile"
+    },
+    "WriteJobFile": {
+      "Comment": "REPLACED RunSSMInstall (ssm:sendCommand). Confirmed unworkable: AppStream Image Builder instances live in an AWS-internal account (e.g. a Photon-managed account), invisible to SSM and EC2 describe APIs in this account -- there is no SSM-managed instance to target. The boot-time poller (ccpam-build-poller.sh, baked into the base image) polls jobs/<builderName>/job.json instead; this state writes that file. The job's identifying ID is the execution ARN (see BuildJobPayload's jobPayload), which the poller echoes back into result.json so GetJobResult/IsJobComplete below can confirm THIS execution's result, not a stale one from a prior attempt against the same reused builder. NOTE: ClearStaleResult (immediately before this state) deletes any leftover result.json from a prior attempt FIRST, so there is never a window where a fresh job.json coexists with a stale result.json.",
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:s3:putObject",
+      "Parameters": {
+        "Bucket.$": "$.artifactBucket",
+        "Key.$": "States.Format('jobs/{}/job.json', $.builderName)",
+        "Body.$": "States.JsonToString($.jobPayload)"
+      },
+      "ResultPath": "$.writeJobResult",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "ReleaseLockFail",
+          "ResultPath": "$.error"
+        }
+      ],
+      "Next": "WaitForJobResult"
+    },
+    "WaitForJobResult": {
       "Type": "Wait",
       "Seconds": 30,
-      "Next": "GetSSMStatus"
+      "Next": "GetJobResult"
     },
-
-    "GetSSMStatus": {
+    "GetJobResult": {
+      "Comment": "REPLACED GetSSMStatus (ssm:getCommandInvocation). States.StringToJson($.Body) on an aws-sdk:s3:getObject Task's ResultSelector is AWS's own documented, confirmed-working pattern for parsing a JSON object's content inline (AWS's own 'AWS Step Functions Supports 200 AWS Services' blog post uses this exact construct in its GetTranscriptionText example) -- not to be confused with an unrelated LocalStack emulator bug report for the same intrinsic used elsewhere, which is a third-party emulator limitation, not a real-AWS one. Catches the not-found case separately and loops back to WaitForJobResult, since 'no result yet' is the expected steady state while the poller is still working through the build, not a failure.",
       "Type": "Task",
-      "Resource": "arn:aws:states:::aws-sdk:ssm:getCommandInvocation",
+      "Resource": "arn:aws:states:::aws-sdk:s3:getObject",
       "Parameters": {
-        "CommandId.$": "$.ssm.Command.CommandId",
-        "InstanceId.$": "$.instanceId"
+        "Bucket.$": "$.artifactBucket",
+        "Key.$": "States.Format('jobs/{}/result.json', $.builderName)"
       },
-      "ResultPath": "$.ssmStatus",
+      "ResultSelector": {
+        "parsed.$": "States.StringToJson($.Body)"
+      },
+      "ResultPath": "$.jobResult",
       "Catch": [
-        { "ErrorEquals": ["States.ALL"], "Next": "ReleaseLockFail" }
+        {
+          "ErrorEquals": [
+            "S3.NoSuchKeyException"
+          ],
+          "Next": "WaitForJobResult",
+          "ResultPath": "$.error"
+        },
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "ReleaseLockFail",
+          "ResultPath": "$.error"
+        }
       ],
-      "Next": "IsSSMComplete"
+      "Next": "IsJobComplete"
     },
-
-    "IsSSMComplete": {
+    "IsJobComplete": {
+      "Comment": "Checks BOTH status AND jobId (against this execution's own ARN) before treating a success/failed result as authoritative -- guards against reading a stale result.json left over from a prior attempt against the same builder name. The third branch (no_job_received) is unconditional on jobId, since the poller writes that sentinel before ever reading a real job.json -- there is no execution ARN to match in that case. This is what gives this execution a real signal if the poller gave up waiting (50 min) well before this state machine's own TimeoutSeconds (90 min) would otherwise have fired with no feedback at all.",
       "Type": "Choice",
       "Choices": [
         {
-          "Variable": "$.ssmStatus.Status",
-          "StringEquals": "Success",
+          "And": [
+            {
+              "Variable": "$.jobResult.parsed.status",
+              "StringEquals": "success"
+            },
+            {
+              "Variable": "$.jobResult.parsed.jobId",
+              "StringEqualsPath": "$$.Execution.Id"
+            }
+          ],
           "Next": "WaitForImage"
         },
         {
-          "Variable": "$.ssmStatus.Status",
-          "StringEquals": "Failed",
+          "And": [
+            {
+              "Variable": "$.jobResult.parsed.status",
+              "StringEquals": "failed"
+            },
+            {
+              "Variable": "$.jobResult.parsed.jobId",
+              "StringEqualsPath": "$$.Execution.Id"
+            }
+          ],
+          "Next": "ReleaseLockFail"
+        },
+        {
+          "Variable": "$.jobResult.parsed.status",
+          "StringEquals": "no_job_received",
           "Next": "ReleaseLockFail"
         }
       ],
-      "Default": "WaitForSSM"
+      "Default": "WaitForJobResult"
     },
-
     "WaitForImage": {
       "Type": "Wait",
       "Seconds": 60,
       "Next": "DescribeImage"
     },
-
     "DescribeImage": {
       "Type": "Task",
       "Resource": "arn:aws:states:::aws-sdk:appstream:describeImages",
@@ -244,11 +536,16 @@
       },
       "ResultPath": "$.imageStatus",
       "Catch": [
-        { "ErrorEquals": ["States.ALL"], "Next": "ReleaseLockFail" }
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "ReleaseLockFail",
+          "ResultPath": "$.error"
+        }
       ],
       "Next": "IsImageReady"
     },
-
     "IsImageReady": {
       "Type": "Choice",
       "Choices": [
@@ -265,7 +562,6 @@
       ],
       "Default": "WaitForImage"
     },
-
     "ShareImage": {
       "Type": "Parallel",
       "Branches": [
@@ -307,18 +603,25 @@
         }
       ],
       "Catch": [
-        { "ErrorEquals": ["States.ALL"], "Next": "ReleaseLockFail" }
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "ReleaseLockFail",
+          "ResultPath": "$.error"
+        }
       ],
       "Next": "ReleaseLockSuccess"
     },
-
     "ReleaseLockSuccess": {
       "Type": "Task",
       "Resource": "arn:aws:states:::aws-sdk:dynamodb:updateItem",
       "Parameters": {
         "TableName": "AppStreamBuildLocks",
         "Key": {
-          "Tenant": { "S.$": "$.tenant" }
+          "Tenant": {
+            "S.$": "$.tenant"
+          }
         },
         "UpdateExpression": "SET #s = :complete",
         "ConditionExpression": "ExecutionArn = :exec",
@@ -326,23 +629,34 @@
           "#s": "Status"
         },
         "ExpressionAttributeValues": {
-          ":complete": { "S": "COMPLETE" },
-          ":exec": { "S.$": "$$.Execution.Id" }
+          ":complete": {
+            "S": "COMPLETE"
+          },
+          ":exec": {
+            "S.$": "$$.Execution.Id"
+          }
         }
       },
       "Catch": [
-        { "ErrorEquals": ["States.ALL"], "Next": "Success" }
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "Success",
+          "ResultPath": "$.error"
+        }
       ],
       "Next": "Success"
     },
-
     "ReleaseLockFail": {
       "Type": "Task",
       "Resource": "arn:aws:states:::aws-sdk:dynamodb:updateItem",
       "Parameters": {
         "TableName": "AppStreamBuildLocks",
         "Key": {
-          "Tenant": { "S.$": "$.tenant" }
+          "Tenant": {
+            "S.$": "$.tenant"
+          }
         },
         "UpdateExpression": "SET #s = :failed",
         "ConditionExpression": "ExecutionArn = :exec",
@@ -350,20 +664,28 @@
           "#s": "Status"
         },
         "ExpressionAttributeValues": {
-          ":failed": { "S": "FAILED" },
-          ":exec": { "S.$": "$$.Execution.Id" }
+          ":failed": {
+            "S": "FAILED"
+          },
+          ":exec": {
+            "S.$": "$$.Execution.Id"
+          }
         }
       },
       "Catch": [
-        { "ErrorEquals": ["States.ALL"], "Next": "Fail" }
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "Fail",
+          "ResultPath": "$.error"
+        }
       ],
       "Next": "Fail"
     },
-
     "Fail": {
       "Type": "Fail"
     },
-
     "Success": {
       "Type": "Succeed"
     }

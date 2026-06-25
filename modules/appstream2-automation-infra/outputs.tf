@@ -29,7 +29,7 @@ output "artifact_bucket_name" {
   value       = var.artifact_bucket_name
 }
 
-output "sfn_logs_kms_key_arn" {
-  description = "ARN of this stack's own KMS key (aws_kms_key.sfn_logs). On the owning stack (create_shared_resources = true, conventionally 'platform'), this is ALSO the key that encrypts the shared build-lock table — every other stack reads this output via a terragrunt dependency block to populate its own build_lock_table_kms_key_arn input, rather than hardcoding the ARN, so the value always reflects whatever key actually exists rather than a snapshot that could silently go stale (e.g. after a destroy/recreate or manual key replacement on the owning stack)."
-  value       = aws_kms_key.sfn_logs.arn
+output "build_lock_table_kms_key_arn" {
+  description = "KMS key ARN encrypting the shared build-lock table — set on the platform (owning) stack only"
+  value       = var.create_shared_resources ? aws_kms_key.sfn_logs.arn : null
 }

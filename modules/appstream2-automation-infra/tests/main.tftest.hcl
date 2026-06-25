@@ -1,3 +1,5 @@
+# tests/main.tftest.hcl
+
 override_data {
   target = data.aws_dynamodb_table.build_locks[0]
   values = {
@@ -79,23 +81,23 @@ override_resource {
 mock_provider "aws" {}
 
 variables {
-  aws_region              = "eu-west-2"
-  account_id               = "979566283533"
-  project_name             = "cc-pam-apc"
-  tenant_key               = "apc"
-  base_image_name          = "CCPAM-AppStream-RockyLinux8-Base-2026-04-v2"
-  banner_message           = "UNAUTHORISED ACCESS WARNING"
-  live_account_id          = "579976740007"
-  prelive_account_id       = "800511960003"
-  vpc_id                   = "vpc-054b75f6e02609595"
-  subnet_id                = "subnet-026bf861b538b0b63"
-  security_group_id        = "sg-0385fa4b97d81a336"
-  ssm_document_source      = "./tests/fixtures/ssm-document.json"
-  stepfn_definition_file   = "./tests/fixtures/stepfunction_definition.json"
-  artifact_bucket_name     = "appstream-artifacts-979566283533-eu-west-2"
-  build_lock_table_name    = "AppStreamBuildLocks"
+  aws_region                   = "eu-west-2"
+  account_id                   = "979566283533"
+  project_name                 = "cc-pam-apc"
+  tenant_key                   = "apc"
+  base_image_name              = "CCPAM-AppStream-RockyLinux8-Base-2026-04-v2"
+  banner_message               = "UNAUTHORISED ACCESS WARNING"
+  live_account_id              = "579976740007"
+  prelive_account_id           = "800511960003"
+  vpc_id                       = "vpc-054b75f6e02609595"
+  subnet_id                    = "subnet-026bf861b538b0b63"
+  security_group_id            = "sg-0385fa4b97d81a336"
+  ssm_document_source          = "./tests/fixtures/ssm-document.json"
+  stepfn_definition_file       = "./tests/fixtures/stepfunction_definition.json"
+  artifact_bucket_name         = "appstream-artifacts-979566283533-eu-west-2"
+  build_lock_table_name        = "AppStreamBuildLocks"
   build_lock_table_kms_key_arn = "arn:aws:kms:eu-west-2:979566283533:key/b902403e-f6ad-46c5-a548-29ee27e044db"
-  create_shared_resources  = false
+  create_shared_resources      = false
 }
 
 run "tenant_stack_does_not_create_shared_resources" {
@@ -135,8 +137,8 @@ run "platform_stack_creates_shared_resources" {
 
   variables {
     tenant_key              = "platform"
-    project_name             = "cc-pam"
-    create_shared_resources  = true
+    project_name            = "cc-pam"
+    create_shared_resources = true
   }
 
   assert {
@@ -163,7 +165,7 @@ run "step_function_role_denies_latest_path_reads" {
       aws_iam_policy.step_function_policy.policy,
       "platform/latest/*"
     )
-    error_message = "Step Function IAM policy must explicitly deny reads to platform/latest/*"
+    error_message = "Step Function IAM policy must explicitly deny reads to platform/latest/*."
   }
 
   assert {
@@ -171,7 +173,38 @@ run "step_function_role_denies_latest_path_reads" {
       aws_iam_policy.step_function_policy.policy,
       "tenants/*/latest/*"
     )
-    error_message = "Step Function IAM policy must explicitly deny reads to tenants/*/latest/*"
+    error_message = "Step Function IAM policy must explicitly deny reads to tenants/*/latest/*."
+  }
+}
+
+run "step_function_role_grants_jobs_path_and_describe_execution" {
+  command = apply
+
+  assert {
+    condition = strcontains(
+      aws_iam_policy.step_function_policy.policy,
+      "s3:PutObject"
+    ) && strcontains(
+      aws_iam_policy.step_function_policy.policy,
+      "/jobs/*"
+    )
+    error_message = "Step Function IAM policy must grant s3:PutObject on jobs/* for WriteJobFile."
+  }
+
+  assert {
+    condition = strcontains(
+      aws_iam_policy.step_function_policy.policy,
+      "s3:DeleteObject"
+    )
+    error_message = "Step Function IAM policy must grant s3:DeleteObject on jobs/* for ClearStaleResult."
+  }
+
+  assert {
+    condition = strcontains(
+      aws_iam_policy.step_function_policy.policy,
+      "states:DescribeExecution"
+    )
+    error_message = "Step Function IAM policy must grant states:DescribeExecution for stale-lock takeover."
   }
 }
 
@@ -183,7 +216,30 @@ run "appstream_instance_role_denies_latest_path_reads" {
       aws_iam_policy.appstream_instance_policy.policy,
       "platform/latest/*"
     )
-    error_message = "Image Builder instance IAM policy must explicitly deny reads to platform/latest/*"
+    error_message = "Image Builder instance IAM policy must explicitly deny reads to platform/latest/*."
+  }
+}
+
+run "appstream_instance_role_grants_jobs_path_writes" {
+  command = apply
+
+  assert {
+    condition = strcontains(
+      aws_iam_policy.appstream_instance_policy.policy,
+      "s3:PutObject"
+    ) && strcontains(
+      aws_iam_policy.appstream_instance_policy.policy,
+      "/jobs/*"
+    )
+    error_message = "Instance IAM policy must grant s3:PutObject on jobs/* for the build poller."
+  }
+
+  assert {
+    condition = strcontains(
+      aws_iam_policy.appstream_instance_policy.policy,
+      "s3:DeleteObject"
+    )
+    error_message = "Instance IAM policy must grant s3:DeleteObject on jobs/* for stale result cleanup."
   }
 }
 
