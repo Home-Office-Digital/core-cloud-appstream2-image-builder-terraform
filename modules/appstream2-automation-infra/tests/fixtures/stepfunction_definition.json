@@ -564,7 +564,9 @@
       "Default": "WaitForImage"
     },
     "ShareImage": {
+      "Comment": "Parallel output is an array of branch results. Without ResultPath, that array REPLACES the entire state — ReleaseLockSuccess then loses $.tenant and fails with States.Runtime on JSONPath '$.tenant' (confirmed: input became [{},{}] after ShareLive/SharePrelive). ResultPath preserves the execution payload at the root.",
       "Type": "Parallel",
+      "ResultPath": "$.shareResults",
       "Branches": [
         {
           "StartAt": "ShareLive",
