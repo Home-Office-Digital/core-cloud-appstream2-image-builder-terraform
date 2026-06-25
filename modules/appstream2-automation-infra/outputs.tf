@@ -33,3 +33,8 @@ output "build_lock_table_kms_key_arn" {
   description = "KMS key ARN encrypting the shared build-lock table — set on the platform (owning) stack only"
   value       = var.create_shared_resources ? aws_kms_key.sfn_logs.arn : null
 }
+
+output "sfn_logs_kms_key_arn" {
+  description = "Deprecated: use build_lock_table_kms_key_arn. Retained so tenant stacks can read platform outputs during the output rename migration."
+  value       = var.create_shared_resources ? aws_kms_key.sfn_logs.arn : null
+}
