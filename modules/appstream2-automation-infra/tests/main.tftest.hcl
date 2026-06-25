@@ -206,6 +206,14 @@ run "step_function_role_grants_jobs_path_and_describe_execution" {
     )
     error_message = "Step Function IAM policy must grant states:DescribeExecution for stale-lock takeover."
   }
+
+  assert {
+    condition = strcontains(
+      aws_iam_policy.step_function_policy.policy,
+      "kms:GenerateDataKey"
+    )
+    error_message = "Step Function IAM policy must grant kms:GenerateDataKey for SSE-KMS writes to the shared artifact bucket."
+  }
 }
 
 run "appstream_instance_role_denies_latest_path_reads" {
@@ -240,6 +248,14 @@ run "appstream_instance_role_grants_jobs_path_writes" {
       "s3:DeleteObject"
     )
     error_message = "Instance IAM policy must grant s3:DeleteObject on jobs/* for stale result cleanup."
+  }
+
+  assert {
+    condition = strcontains(
+      aws_iam_policy.appstream_instance_policy.policy,
+      "kms:GenerateDataKey"
+    )
+    error_message = "Instance IAM policy must grant kms:GenerateDataKey for SSE-KMS writes to the shared artifact bucket."
   }
 }
 

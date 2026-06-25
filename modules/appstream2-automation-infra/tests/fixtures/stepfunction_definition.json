@@ -436,7 +436,8 @@
       "Parameters": {
         "Bucket.$": "$.artifactBucket",
         "Key.$": "States.Format('jobs/{}/job.json', $.builderName)",
-        "Body.$": "States.JsonToString($.jobPayload)"
+        "Body.$": "$.jobPayload",
+        "ContentType": "application/json"
       },
       "ResultPath": "$.writeJobResult",
       "Catch": [
