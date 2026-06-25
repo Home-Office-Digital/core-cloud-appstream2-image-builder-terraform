@@ -158,17 +158,19 @@ resource "aws_iam_policy" "step_function_policy" {
         ]
         Resource = aws_kms_key.sfn_logs.arn
       },
-      # FIXED: separate grant for the build-lock table's actual encryption
-      # key, which is NOT the same as this stack's own sfn_logs key for any
-      # tenant except platform (the table owner) — see
-      # local.build_lock_table_kms_key_arn above. Needed for AcquireLock's
-      # dynamodb:PutItem and ReleaseLockSuccess/ReleaseLockFail's
-      # dynamodb:UpdateItem, all of which read/write an item in a
-      # server-side-encrypted table.
+      # FIXED: grant on the build-lock table's encryption key (platform's key
+      # for tenant stacks). DynamoDB PutItem/UpdateItem need Decrypt; the
+      # shared artifact bucket also uses this same KMS key for default
+      # SSE-KMS, so s3:PutObject/DeleteObject on jobs/* need
+      # GenerateDataKey/Encrypt too — without them tenant state machines hit
+      # S3.AccessDeniedException on WriteJobFile (confirmed on
+      # cc-pam-apc-step-function-role).
       {
         Effect = "Allow"
         Action = [
+          "kms:Encrypt",
           "kms:Decrypt",
+          "kms:GenerateDataKey*",
           "kms:DescribeKey"
         ]
         Resource = local.build_lock_table_kms_key_arn
@@ -253,6 +255,19 @@ resource "aws_iam_policy" "appstream_instance_policy" {
           aws_kms_key.sfn_logs.arn,
           "arn:aws:ssm:${var.aws_region}:${var.account_id}:parameter/${var.project_name}/appstream/*"
         ]
+      },
+      # Shared artifact bucket SSE-KMS uses the platform lock-table key for
+      # tenant stacks (see step_function_policy comment). Poller PutObject on
+      # jobs/* needs GenerateDataKey on that key, not this stack's own sfn_logs key.
+      {
+        Effect = "Allow"
+        Action = [
+          "kms:Encrypt",
+          "kms:Decrypt",
+          "kms:GenerateDataKey*",
+          "kms:DescribeKey"
+        ]
+        Resource = local.build_lock_table_kms_key_arn
       },
       # The Image Builder instance itself downloads pinned platform/tenant script
       # artifacts at build time -- never the latest/ pointer.
