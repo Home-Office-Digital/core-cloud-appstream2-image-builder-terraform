@@ -66,7 +66,7 @@ variable "tenant_key" {
 }
 
 variable "ssm_document_source" {
-  description = "Path to this tenant's SSM document JSON (for example tenants/apc/ssm/automation.json). One stack manages exactly one tenant's document"
+  description = "Path to this tenant's SSM document JSON (for example tenants/apc/ssm/automation.json). One stack manages exactly one tenant's document — see design doc Section 2."
   type        = string
 
   validation {
@@ -105,7 +105,7 @@ variable "security_group_id" {
 
 variable "stepfn_definition_file" {
   type        = string
-  description = "Path to the Step Functions ASL definition JSON (appstream-build-orchestrator.asl.json)."
+  description = "Path to the Step Functions ASL definition JSON (appstream-build-orchestrator.asl.json — see design doc Section 5)."
 
   validation {
     condition     = length(trimspace(var.stepfn_definition_file)) > 0 && can(regex("\\.json$", var.stepfn_definition_file))
@@ -134,7 +134,7 @@ variable "banner_message" {
 }
 
 variable "artifact_bucket_name" {
-  description = "Name of the existing S3 bucket holding versioned platform/tenant script artifacts. Created once, shared across all tenant stacks — not managed by this module."
+  description = "Name of the existing S3 bucket holding versioned platform/tenant script artifacts (see design doc Section 3). Created once, shared across all tenant stacks — not managed by this module."
   type        = string
 
   validation {
@@ -144,7 +144,7 @@ variable "artifact_bucket_name" {
 }
 
 variable "build_lock_table_name" {
-  description = "Name of the shared DynamoDB build-lock table. Created once, shared across all tenant stacks — not managed by this module."
+  description = "Name of the shared DynamoDB build-lock table (see design doc Section 4). Created once, shared across all tenant stacks — not managed by this module."
   type        = string
   default     = "AppStreamBuildLocks"
 
@@ -154,8 +154,14 @@ variable "build_lock_table_name" {
   }
 }
 
+variable "create_shared_resources" {
+  description = "Whether this stack creates the shared, account-wide resources (DynamoDB lock table, S3 artifact bucket). Set true on exactly one tenant stack — conventionally 'platform' — and false everywhere else, so the shared resources aren't duplicated or fought over across tenant stacks."
+  type        = bool
+  default     = false
+}
+
 variable "build_lock_table_kms_key_arn" {
-  description = "ARN of the KMS key that encrypts the shared build-lock table, required on every stack where create_shared_resources is false (every tenant except the owner, conventionally 'platform'). Needed because the owning stack's own aws_kms_key.sfn_logs is NOT necessarily the same key that encrypts the lock table for non-owning stacks — this was previously read from the data source's server_side_encryption block directly, but that field is a legacy SDKv2 schema Block, which Terraform's test-framework override_data cannot populate, so it's passed explicitly instead. Ignored entirely when create_shared_resources is true, since that stack reads its own aws_kms_key.sfn_logs.arn directly."
+  description = "ARN of the KMS key that encrypts the shared build-lock table, required on every stack where create_shared_resources is false (every tenant except the owner, conventionally 'platform'). Ignored when create_shared_resources is true."
   type        = string
   default     = ""
 
@@ -163,10 +169,4 @@ variable "build_lock_table_kms_key_arn" {
     condition     = var.create_shared_resources || length(trimspace(var.build_lock_table_kms_key_arn)) > 0
     error_message = "build_lock_table_kms_key_arn must be set on every stack where create_shared_resources is false."
   }
-}
-
-variable "create_shared_resources" {
-  description = "Whether this stack creates the shared, account-wide resources (DynamoDB lock table, S3 artifact bucket). Set true on exactly one tenant stack — conventionally 'platform' — and false everywhere else, so the shared resources aren't duplicated or fought over across tenant stacks."
-  type        = bool
-  default     = false
 }

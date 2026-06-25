@@ -1,0 +1,44 @@
+{
+  "Comment": "Minimal harness for the negative DescribeStaleExecution test (aws stepfunctions test-state). Stub targets are Pass/Fail only — we assert nextState after ExecutionDoesNotExist is caught, not downstream lock writes.",
+  "StartAt": "DescribeStaleExecution",
+  "States": {
+    "DescribeStaleExecution": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:sfn:describeExecution",
+      "Parameters": {
+        "ExecutionArn.$": "$.lockExecutionArn"
+      },
+      "ResultPath": "$.staleExecution",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "Sfn.ExecutionDoesNotExistException"
+          ],
+          "Next": "TakeoverAcquireLock",
+          "ResultPath": "$.error"
+        },
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "LockFailed",
+          "ResultPath": "$.error"
+        }
+      ],
+      "Next": "IsExecutionTerminal"
+    },
+    "IsExecutionTerminal": {
+      "Type": "Pass",
+      "End": true
+    },
+    "TakeoverAcquireLock": {
+      "Type": "Pass",
+      "End": true
+    },
+    "LockFailed": {
+      "Type": "Fail",
+      "Error": "LockFailed",
+      "Cause": "stub for negative test harness"
+    }
+  }
+}

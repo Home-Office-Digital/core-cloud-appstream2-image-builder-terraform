@@ -92,6 +92,17 @@ resource "aws_iam_policy" "step_function_policy" {
         ]
         Resource = local.build_lock_table_arn
       },
+      # v1.6 stale-BUILDING lock takeover: after AcquireLock fails, the state
+      # machine reads the lock row (GetItem) and calls DescribeExecution on
+      # the stored ExecutionArn before TakeoverAcquireLock. Scoped to this
+      # state machine's executions only.
+      {
+        Effect = "Allow"
+        Action = [
+          "states:DescribeExecution"
+        ]
+        Resource = "arn:aws:states:${var.aws_region}:${var.account_id}:execution:${var.project_name}-state-machine:*"
+      },
       # Deliberately NOT granted: s3:GetObject on */latest/* — see local.artifact_latest_deny below.
       # The Step Function must only ever receive pre-resolved SHAs from CI/CD.
       {
@@ -576,7 +587,7 @@ locals {
 }
 
 # Step Function State Machine
-# Definition is the v1.5 ASL -- a pure JSON file, not a
+# Definition is the v1.6 ASL -- a pure JSON file, not a
 # templatefile(). Nothing tenant-specific is baked into the definition itself;
 # every value (tenant, platformVersion, tenantVersion, builderName,
 # startedAtEpoch, imageName, liveAccountId, preliveAccountId) arrives at
