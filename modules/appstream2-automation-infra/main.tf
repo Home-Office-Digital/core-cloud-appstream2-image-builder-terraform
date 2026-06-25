@@ -113,10 +113,19 @@ resource "aws_iam_policy" "step_function_policy" {
       # confirmed needed via the same AccessDenied pattern already hit and
       # fixed on the instance role's policy for its own jobs/ write access.
       # Scoped narrowly to jobs/ only, mirroring the instance role's grant.
+      # FIXED (round 2): DeleteObject added -- ClearStaleResult (a new ASL
+      # state, runs immediately before WriteJobFile) deletes any leftover
+      # result.json from a prior attempt before writing the new job, to
+      # close a real race: without this, a stale result (e.g. a
+      # no_job_received sentinel from a previous timed-out attempt) could
+      # still be sitting at this key when THIS execution's GetJobResult
+      # polls, which can happen within seconds -- long before the poller
+      # itself would ever reach its own (much later) stale-result check.
       {
         Effect = "Allow"
         Action = [
-          "s3:PutObject"
+          "s3:PutObject",
+          "s3:DeleteObject"
         ]
         Resource = [
           "${local.artifact_bucket_arn}/jobs/*"
@@ -260,10 +269,14 @@ resource "aws_iam_policy" "appstream_instance_policy" {
       # actually tried to report a result. Scoped narrowly to jobs/ only,
       # not the full bucket, since the instance should never need to
       # write into platform/ or tenants/.
+      # FIXED: DeleteObject added -- the poller's stale-result cleanup
+      # (deleting a result.json belonging to a different, older jobId
+      # before starting a new build) uses `aws s3 rm`, which needs this.
       {
         Effect = "Allow"
         Action = [
-          "s3:PutObject"
+          "s3:PutObject",
+          "s3:DeleteObject"
         ]
         Resource = [
           "${local.artifact_bucket_arn}/jobs/*"
@@ -563,11 +576,13 @@ locals {
 }
 
 # Step Function State Machine
-# Definition is the v1.2 ASL — a pure JSON file, not a
+# Definition is the v1.5 ASL -- a pure JSON file, not a
 # templatefile(). Nothing tenant-specific is baked into the definition itself;
 # every value (tenant, platformVersion, tenantVersion, builderName,
-# instanceId, imageName, liveAccountId, preliveAccountId) arrives at
-# StartExecution time, resolved by CI/CD.
+# startedAtEpoch, imageName, liveAccountId, preliveAccountId) arrives at
+# StartExecution time, resolved by CI/CD. instanceId was removed entirely
+# in v1.5 -- the poller-based design (see ccpam-build-poller.sh) never
+# needed one; only builderName is required to address the jobs/ S3 paths.
 resource "aws_sfn_state_machine" "appstream_automation" {
   name     = "${var.project_name}-state-machine"
   role_arn = aws_iam_role.step_function_role.arn
