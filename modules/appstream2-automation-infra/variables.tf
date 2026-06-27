@@ -170,3 +170,20 @@ variable "build_lock_table_kms_key_arn" {
     error_message = "build_lock_table_kms_key_arn must be set on every stack where create_shared_resources is false."
   }
 }
+
+variable "lock_doctor_definition_file" {
+  description = "Path to the shared lock-doctor Step Functions ASL JSON. Set on the platform stack only (create_shared_resources = true) to deploy the scheduled stale-lock healer."
+  type        = string
+  default     = ""
+}
+
+variable "lock_doctor_schedule_expression" {
+  description = "EventBridge schedule for the lock doctor (for example rate(5 minutes)). Only used when lock_doctor_definition_file is set on the platform stack."
+  type        = string
+  default     = "rate(5 minutes)"
+
+  validation {
+    condition     = can(regex("^(rate\\(|cron\\()", var.lock_doctor_schedule_expression))
+    error_message = "lock_doctor_schedule_expression must be a rate(...) or cron(...) expression."
+  }
+}
