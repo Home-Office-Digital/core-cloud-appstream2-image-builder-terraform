@@ -157,6 +157,37 @@ run "platform_stack_creates_shared_resources" {
   }
 }
 
+run "platform_stack_creates_lock_doctor_when_configured" {
+  command = plan
+
+  variables {
+    tenant_key                      = "platform"
+    project_name                    = "cc-pam"
+    create_shared_resources         = true
+    lock_doctor_definition_file     = "./tests/fixtures/lock_doctor_definition.json"
+    lock_doctor_schedule_expression = "rate(5 minutes)"
+  }
+
+  assert {
+    condition     = length(aws_sfn_state_machine.lock_doctor) == 1
+    error_message = "Platform stack must create the scheduled lock-doctor state machine when lock_doctor_definition_file is set."
+  }
+
+  assert {
+    condition     = length(aws_cloudwatch_event_rule.lock_doctor) == 1
+    error_message = "Platform stack must schedule the lock doctor via EventBridge."
+  }
+}
+
+run "tenant_stack_does_not_create_lock_doctor" {
+  command = plan
+
+  assert {
+    condition     = length(aws_sfn_state_machine.lock_doctor) == 0
+    error_message = "Tenant stacks must not create the shared lock-doctor state machine."
+  }
+}
+
 run "step_function_role_denies_latest_path_reads" {
   command = apply
 

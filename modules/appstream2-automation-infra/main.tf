@@ -592,6 +592,8 @@ locals {
   # real Terragrunt inputs and test run blocks.
   build_lock_table_kms_key_arn = var.create_shared_resources ? aws_kms_key.sfn_logs.arn : var.build_lock_table_kms_key_arn
 
+  enable_lock_doctor = var.create_shared_resources && length(trimspace(var.lock_doctor_definition_file)) > 0
+
   # Structurally enforces : nothing reading
   # through this module's IAM roles may ever resolve the latest/ pointer.
   # Only the CI/CD role (managed outside this module) may read it.
@@ -636,6 +638,174 @@ resource "aws_cloudwatch_log_group" "sfn_logs" {
 resource "aws_iam_role_policy_attachment" "step_function_logging_policy_attachment" {
   role       = aws_iam_role.step_function_role.name
   policy_arn = aws_iam_policy.sfn_logging.arn
+}
+
+# Scheduled lock doctor — account-wide stale BUILDING lock recovery (platform stack only).
+resource "aws_iam_role" "lock_doctor" {
+  count = local.enable_lock_doctor ? 1 : 0
+  name  = "${var.project_name}-lock-doctor-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "states.amazonaws.com"
+        }
+      }
+    ]
+  })
+}
+
+resource "aws_iam_policy" "lock_doctor" {
+  count = local.enable_lock_doctor ? 1 : 0
+  name  = "${var.project_name}-lock-doctor-policy"
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "dynamodb:Scan",
+          "dynamodb:UpdateItem"
+        ]
+        Resource = local.build_lock_table_arn
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "states:DescribeExecution"
+        ]
+        Resource = "arn:aws:states:${var.aws_region}:${var.account_id}:execution:*:*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "kms:Encrypt",
+          "kms:Decrypt",
+          "kms:GenerateDataKey*",
+          "kms:DescribeKey"
+        ]
+        Resource = local.build_lock_table_kms_key_arn
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogDelivery",
+          "logs:GetLogDelivery",
+          "logs:UpdateLogDelivery",
+          "logs:DeleteLogDelivery",
+          "logs:ListLogDeliveries",
+          "logs:PutResourcePolicy",
+          "logs:DescribeResourcePolicies",
+          "logs:DescribeLogGroups"
+        ]
+        Resource = "*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "xray:PutTraceSegments",
+          "xray:PutTelemetryRecords"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "lock_doctor" {
+  count      = local.enable_lock_doctor ? 1 : 0
+  role       = aws_iam_role.lock_doctor[0].name
+  policy_arn = aws_iam_policy.lock_doctor[0].arn
+}
+
+resource "aws_iam_role_policy_attachment" "lock_doctor_logging" {
+  count      = local.enable_lock_doctor ? 1 : 0
+  role       = aws_iam_role.lock_doctor[0].name
+  policy_arn = aws_iam_policy.sfn_logging.arn
+}
+
+resource "aws_cloudwatch_log_group" "lock_doctor" {
+  count             = local.enable_lock_doctor ? 1 : 0
+  name              = "/aws/states/${var.project_name}-lock-doctor"
+  retention_in_days = 365
+  kms_key_id        = aws_kms_key.sfn_logs.arn
+}
+
+resource "aws_sfn_state_machine" "lock_doctor" {
+  count    = local.enable_lock_doctor ? 1 : 0
+  name     = "${var.project_name}-lock-doctor"
+  role_arn = aws_iam_role.lock_doctor[0].arn
+
+  tracing_configuration {
+    enabled = true
+  }
+
+  definition = file(var.lock_doctor_definition_file)
+
+  logging_configuration {
+    include_execution_data = true
+    level                  = "ALL"
+    log_destination        = "${aws_cloudwatch_log_group.lock_doctor[0].arn}:*"
+  }
+}
+
+resource "aws_iam_role" "lock_doctor_schedule" {
+  count = local.enable_lock_doctor ? 1 : 0
+  name  = "${var.project_name}-lock-doctor-schedule-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "events.amazonaws.com"
+        }
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy" "lock_doctor_schedule" {
+  count = local.enable_lock_doctor ? 1 : 0
+  name  = "${var.project_name}-lock-doctor-schedule-start"
+  role  = aws_iam_role.lock_doctor_schedule[0].id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "states:StartExecution"
+        ]
+        Resource = aws_sfn_state_machine.lock_doctor[0].arn
+      }
+    ]
+  })
+}
+
+resource "aws_cloudwatch_event_rule" "lock_doctor" {
+  count               = local.enable_lock_doctor ? 1 : 0
+  name                = "${var.project_name}-lock-doctor-schedule"
+  description         = "Runs the shared AppStream build-lock doctor to heal stale BUILDING locks."
+  schedule_expression = var.lock_doctor_schedule_expression
+}
+
+resource "aws_cloudwatch_event_target" "lock_doctor" {
+  count     = local.enable_lock_doctor ? 1 : 0
+  rule      = aws_cloudwatch_event_rule.lock_doctor[0].name
+  target_id = "LockDoctorStateMachine"
+  arn       = aws_sfn_state_machine.lock_doctor[0].arn
+  role_arn  = aws_iam_role.lock_doctor_schedule[0].arn
+
+  input = jsonencode({
+    lockTableName = var.build_lock_table_name
+  })
 }
 
 # SSM Parameter Store — AppStream session banner message

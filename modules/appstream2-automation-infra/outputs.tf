@@ -34,6 +34,11 @@ output "build_lock_table_kms_key_arn" {
   value       = var.create_shared_resources ? aws_kms_key.sfn_logs.arn : null
 }
 
+output "lock_doctor_state_machine_arn" {
+  description = "ARN of the scheduled lock-doctor state machine (platform stack only, when lock_doctor_definition_file is set)"
+  value       = local.enable_lock_doctor ? aws_sfn_state_machine.lock_doctor[0].arn : null
+}
+
 output "sfn_logs_kms_key_arn" {
   description = "Deprecated: use build_lock_table_kms_key_arn. Retained so tenant stacks can read platform outputs during the output rename migration."
   value       = var.create_shared_resources ? aws_kms_key.sfn_logs.arn : null

@@ -1,0 +1,198 @@
+{
+  "Comment": "AppStream build-lock doctor — scheduled maintenance. Scans AppStreamBuildLocks for BUILDING rows, calls DescribeExecution on each stored ExecutionArn, and marks the lock FAILED when the execution is terminal (or missing). RUNNING executions are left untouched. Replaces the manual lock-doctor.sh runbook.",
+  "TimeoutSeconds": 300,
+  "StartAt": "ScanBuildingLocks",
+  "States": {
+    "ScanBuildingLocks": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:dynamodb:scan",
+      "Parameters": {
+        "TableName.$": "$.lockTableName",
+        "FilterExpression": "#s = :building",
+        "ExpressionAttributeNames": {
+          "#s": "Status"
+        },
+        "ExpressionAttributeValues": {
+          ":building": {
+            "S": "BUILDING"
+          }
+        }
+      },
+      "ResultPath": "$.scan",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "DoctorFailed"
+        }
+      ],
+      "Next": "AnyBuildingLocks"
+    },
+    "AnyBuildingLocks": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.scan.Count",
+          "NumericEquals": 0,
+          "Next": "DoctorSucceeded"
+        }
+      ],
+      "Default": "ProcessBuildingLocks"
+    },
+    "ProcessBuildingLocks": {
+      "Type": "Map",
+      "ItemsPath": "$.scan.Items",
+      "MaxConcurrency": 5,
+      "ItemSelector": {
+        "lockTableName.$": "$.lockTableName",
+        "tenant.$": "$$.Map.Item.Value.Tenant.S",
+        "executionArn.$": "$$.Map.Item.Value.ExecutionArn.S",
+        "lockStatus.$": "$$.Map.Item.Value.Status.S"
+      },
+      "Iterator": {
+        "StartAt": "HasExecutionArn",
+        "States": {
+          "HasExecutionArn": {
+            "Type": "Choice",
+            "Choices": [
+              {
+                "And": [
+                  {
+                    "Variable": "$.executionArn",
+                    "IsPresent": true
+                  },
+                  {
+                    "Variable": "$.executionArn",
+                    "StringGreaterThan": ""
+                  }
+                ],
+                "Next": "DescribeLockExecution"
+              }
+            ],
+            "Default": "MarkLockFailed"
+          },
+          "DescribeLockExecution": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::aws-sdk:sfn:describeExecution",
+            "Parameters": {
+              "ExecutionArn.$": "$.executionArn"
+            },
+            "ResultPath": "$.execution",
+            "Catch": [
+              {
+                "ErrorEquals": [
+                  "Sfn.ExecutionDoesNotExistException"
+                ],
+                "Next": "MarkLockFailed",
+                "ResultPath": "$.error"
+              },
+              {
+                "ErrorEquals": [
+                  "States.ALL"
+                ],
+                "Next": "LeaveLockUntouched",
+                "ResultPath": "$.error"
+              }
+            ],
+            "Next": "IsExecutionTerminal"
+          },
+          "IsExecutionTerminal": {
+            "Type": "Choice",
+            "Choices": [
+              {
+                "Variable": "$.execution.status",
+                "StringEquals": "RUNNING",
+                "Next": "LeaveLockRunning"
+              },
+              {
+                "Or": [
+                  {
+                    "Variable": "$.execution.status",
+                    "StringEquals": "FAILED"
+                  },
+                  {
+                    "Variable": "$.execution.status",
+                    "StringEquals": "TIMED_OUT"
+                  },
+                  {
+                    "Variable": "$.execution.status",
+                    "StringEquals": "ABORTED"
+                  },
+                  {
+                    "Variable": "$.execution.status",
+                    "StringEquals": "SUCCEEDED"
+                  }
+                ],
+                "Next": "MarkLockFailed"
+              }
+            ],
+            "Default": "LeaveLockUntouched"
+          },
+          "MarkLockFailed": {
+            "Comment": "Same conditional update as manual lock-doctor.sh: only heal if ExecutionArn still matches.",
+            "Type": "Task",
+            "Resource": "arn:aws:states:::aws-sdk:dynamodb:updateItem",
+            "Parameters": {
+              "TableName.$": "$.lockTableName",
+              "Key": {
+                "Tenant": {
+                  "S.$": "$.tenant"
+                }
+              },
+              "UpdateExpression": "SET #s = :failed",
+              "ConditionExpression": "ExecutionArn = :exec AND #s = :building",
+              "ExpressionAttributeNames": {
+                "#s": "Status"
+              },
+              "ExpressionAttributeValues": {
+                ":failed": {
+                  "S": "FAILED"
+                },
+                ":exec": {
+                  "S.$": "$.executionArn"
+                },
+                ":building": {
+                  "S": "BUILDING"
+                }
+              }
+            },
+            "Catch": [
+              {
+                "ErrorEquals": [
+                  "DynamoDB.ConditionalCheckFailedException"
+                ],
+                "Next": "LeaveLockUntouched",
+                "ResultPath": "$.error"
+              },
+              {
+                "ErrorEquals": [
+                  "States.ALL"
+                ],
+                "Next": "LeaveLockUntouched",
+                "ResultPath": "$.error"
+              }
+            ],
+            "End": true
+          },
+          "LeaveLockRunning": {
+            "Type": "Succeed"
+          },
+          "LeaveLockUntouched": {
+            "Type": "Succeed"
+          }
+        }
+      },
+      "ResultPath": "$.healResults",
+      "Next": "DoctorSucceeded"
+    },
+    "DoctorSucceeded": {
+      "Type": "Succeed"
+    },
+    "DoctorFailed": {
+      "Type": "Fail",
+      "Error": "LockDoctorFailed",
+      "Cause": "Failed to scan or heal BUILDING locks in DynamoDB."
+    }
+  }
+}
